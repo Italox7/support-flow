@@ -38,7 +38,7 @@ jobs:
       DIRECT_URL: postgresql://postgres:postgres@localhost:5432/support_flow?schema=public
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
