@@ -11,6 +11,9 @@ Prisma não modela RLS, então o diff do CI não pega a falta.
 
 ## 2026-10-23 — multer 2.4.0 (GHSA-q7qp-rjg7-q26m) aceito temporariamente
 
+> **Resolvido em 2026-10-29:** NestJS 12.3.2 passou a depender de multer 2.5.0; atualizado sem
+> `overrides`. `npm audit` limpo.
+
 `@nestjs/platform-express` 12.2.0 fixa multer 2.4.0, vulnerável a DoS. A correção (2.5.0) saiu em
 2026-10-22. Não há upload no MVP (nenhum `FileInterceptor`), então o caminho não é alcançável. Não
 fizemos `overrides` para uma versão de um dia (risco de supply chain). **Reavaliar em 2026-10-30**
