@@ -7,6 +7,13 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # TS 7 ainda não é suportado por typescript-eslint, Nest CLI e ts-jest (docs/decisions.md).
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
+      # Os tipos acompanham o Node de produção (.nvmrc / Render), não a versão mais nova.
+      - dependency-name: '@types/node'
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: github-actions
     directory: /
