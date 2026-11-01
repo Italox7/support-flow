@@ -42,6 +42,8 @@ export class ListTicketsQuery {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  // Um `page` enorme estouraria o OFFSET do Postgres (500 em vez de 400).
+  @Max(10_000)
   page = 1;
 
   @IsOptional()

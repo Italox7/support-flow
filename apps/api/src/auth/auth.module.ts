@@ -31,7 +31,7 @@ const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
     RefreshTokensService,
     // A ordem importa: o rate limit vem antes de qualquer trabalho, e o
     // RolesGuard lê o usuário que o JwtAuthGuard anexa. Com `useExisting`, os
-    // testes conseguem trocar o ThrottlerGuard por overrideGuard.
+    // testes trocam o ThrottlerGuard por overrideProvider (overrideGuard não alcança).
     ThrottlerGuard,
     { provide: APP_GUARD, useExisting: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },

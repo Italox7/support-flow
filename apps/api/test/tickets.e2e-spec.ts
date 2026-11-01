@@ -6,10 +6,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { AccessTokenPayload } from '../src/auth/auth.types.js';
 import type { Prisma } from '../src/generated/prisma/client.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
+import { TicketsService } from '../src/tickets/tickets.service.js';
 import { createApp, resetDatabase, TEST_DATABASE_URL } from './e2e-setup.js';
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
+/** Datas de abertura distintas: dois tickets no mesmo ms trocariam de ordem. */
+const hoursAgo = (hours: number) => new Date(Date.now() - hours * HOUR);
 
 interface Actor {
   id: string;
@@ -143,13 +146,16 @@ describe.skipIf(!TEST_DATABASE_URL)('tickets (e2e)', () => {
       const open = await openTicket(customer, { priority: 'HIGH' });
       const waiting = await openTicket(customer);
       const resolved = await openTicket(customer);
+      await setTicket(open.id, { createdAt: hoursAgo(3) });
       await setTicket(waiting.id, {
         status: 'WAITING_CUSTOMER',
         assignee: { connect: { id: agent.id } },
+        createdAt: hoursAgo(2),
       });
       await setTicket(resolved.id, {
         status: 'RESOLVED',
         assignee: { connect: { id: otherAgent.id } },
+        createdAt: hoursAgo(1),
       });
 
       const ids = async (query: string) =>
@@ -166,7 +172,11 @@ describe.skipIf(!TEST_DATABASE_URL)('tickets (e2e)', () => {
 
     it('pagina do mais novo para o mais antigo', async () => {
       const created: string[] = [];
-      for (let i = 0; i < 3; i++) created.push((await openTicket(customer)).id);
+      for (let i = 0; i < 3; i++) {
+        const { id } = await openTicket(customer);
+        await setTicket(id, { createdAt: hoursAgo(3 - i) });
+        created.push(id);
+      }
 
       const res = await as(customer).get('/api/tickets?page=2&pageSize=2').expect(200);
       expect(res.body).toEqual({
@@ -180,6 +190,8 @@ describe.skipIf(!TEST_DATABASE_URL)('tickets (e2e)', () => {
     it.each([
       ['pageSize acima de 100', 'pageSize=101'],
       ['página zero', 'page=0'],
+      ['página acima do máximo', 'page=10001'],
+      ['página fora da faixa de inteiros', 'page=1e300'],
       ['status inexistente', 'status=PENDING'],
       ['responsável inválido', 'assigneeId=fulano'],
     ])('retorna 400 com %s', async (_case, query) => {
@@ -311,11 +323,25 @@ describe.skipIf(!TEST_DATABASE_URL)('tickets (e2e)', () => {
       const ticket = await openTicket(customer);
       await setTicket(ticket.id, { status: 'IN_PROGRESS' });
 
+      // Mesmo destino: em qualquer ordem, a segunda vê RESOLVED (ou perde o
+      // update condicional) e recebe 409.
       const results = await Promise.all([
-        transition(agent, ticket.id, 'WAITING_CUSTOMER'),
-        transition(otherAgent, ticket.id, 'RESOLVED'),
+        transition(agent, ticket.id, 'RESOLVED'),
+        transition(admin, ticket.id, 'RESOLVED'),
       ]);
       expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+    });
+
+    it('applyTransition recusa um status lido que já mudou no banco', async () => {
+      const ticket = await openTicket(customer);
+      await setTicket(ticket.id, { status: 'WAITING_CUSTOMER' });
+
+      const stale = { id: ticket.id, status: 'OPEN' as const };
+      const tickets = app.get(TicketsService);
+      expect(await tickets.applyTransition(prisma, stale, 'IN_PROGRESS', new Date())).toBe(false);
+
+      const stored = await prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+      expect(stored.status).toBe('WAITING_CUSTOMER');
     });
 
     it('rejeita status inexistente com 400', async () => {
