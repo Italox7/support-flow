@@ -2,6 +2,35 @@
 
 Registro curto das decisões que não são óbvias pelo código. A mais recente fica no topo.
 
+## 2026-11-01 — Tickets e comentários (Fase 3)
+
+Contrato e schema revisados pelo Archie antes do código.
+
+- **Ticket de outro cliente é 404, não 403**, em toda rota (inclusive comentários e
+  transições). O `number` é sequencial: um 403 confirmaria que o ticket existe. A ordem dos
+  erros é 404 (escopo) → 403 (papel) → 409 (estado).
+- **Escopo numa função só** (`ticketScope`): toda consulta de ticket passa por ela. Notas
+  internas saem na consulta (`isInternal: false` para o cliente), não no front.
+- **Paginação por offset** (`page`, `pageSize` até 100, envelope `{items, page, pageSize,
+total}`). Cursor não compensa nesta escala e complica a numeração de páginas na tela.
+- **Transições por update condicional** (`where: {id, status: <lido>}`), sem lock: de duas
+  mudanças simultâneas, uma passa e a outra recebe 409. Todo status muda por
+  `TicketsService.applyTransition`, onde a Fase 5 encaixa a pausa do SLA.
+- **Efeitos de comentário na mesma transação** e também condicionais: a 1ª resposta pública
+  de qualquer agente/admin grava `firstResponseAt`; a do responsável tira o ticket de OPEN; a
+  do cliente devolve WAITING_CUSTOMER para IN_PROGRESS. Se outra requisição já mudou o ticket,
+  o efeito é descartado e o comentário fica. Comentar em RESOLVED não reabre.
+- **O cliente pode marcar o próprio ticket como resolvido** (de IN_PROGRESS ou
+  WAITING_CUSTOMER), além de reabrir em até 7 dias. Fechar é só do job.
+- **Políticas de SLA padrão vêm de uma migration de dados**, não do seed: os prazos são
+  calculados na criação e toda prioridade precisa de política em qualquer ambiente. Os E2E
+  não apagam `sla_policies`.
+- **Sem auto-atribuição nesta fase**: sem responsável, só o admin tira um ticket de OPEN. A
+  atribuição é da Fase 4.
+- **Rate limit global** (120/min por rota e por IP), antes da autenticação; `/auth` mantém
+  30/min e 5/min nas rotas que verificam senha.
+- **E2E rodam um arquivo por vez** (projeto `e2e` do Vitest): os arquivos dividem o banco.
+
 ## 2026-10-29 — Autenticação (Fase 2)
 
 - **Negado por padrão**: `JwtAuthGuard` e `RolesGuard` são globais; rota aberta precisa de

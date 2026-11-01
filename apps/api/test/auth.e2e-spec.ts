@@ -1,50 +1,9 @@
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import { Test } from '@nestjs/testing';
-import { ThrottlerGuard } from '@nestjs/throttler';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { AppModule } from '../src/app.module.js';
-import { configureApp } from '../src/app.setup.js';
 import { REFRESH_COOKIE } from '../src/auth/refresh-token.js';
-import { ENV, loadEnv } from '../src/config/env.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
-
-// Só roda contra um banco descartável, apontado explicitamente: o beforeEach
-// apaga as tabelas, então nunca usamos a DATABASE_URL do .env por engano.
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-
-// E recusa qualquer host que não seja local (Supabase incluído): melhor falhar
-// a suíte do que apagar os dados de um banco remoto.
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
-if (TEST_DATABASE_URL && !LOCAL_HOSTS.has(new URL(TEST_DATABASE_URL).hostname)) {
-  throw new Error('TEST_DATABASE_URL precisa apontar para um Postgres local e descartável.');
-}
-
-const env = loadEnv({
-  NODE_ENV: 'test',
-  DATABASE_URL: TEST_DATABASE_URL ?? 'postgresql://unused@localhost/unused',
-  JWT_ACCESS_SECRET: 'e2e-'.padEnd(48, 'x'),
-});
-
-async function createApp(options: { throttle: boolean }): Promise<NestExpressApplication> {
-  let builder = Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(ENV)
-    .useValue(env);
-  if (!options.throttle) {
-    builder = builder.overrideGuard(ThrottlerGuard).useValue({ canActivate: () => true });
-  }
-  const app = (await builder.compile()).createNestApplication<NestExpressApplication>();
-  configureApp(app, env);
-  await app.init();
-  return app;
-}
-
-async function resetDatabase(prisma: PrismaService): Promise<void> {
-  await prisma.refreshToken.deleteMany();
-  await prisma.comment.deleteMany();
-  await prisma.ticket.deleteMany();
-  await prisma.user.deleteMany();
-}
+import { createApp, resetDatabase, TEST_DATABASE_URL } from './e2e-setup.js';
 
 /** Valor do cookie de refresh (`refresh_token=<valor>`) num Set-Cookie. */
 function refreshCookie(res: request.Response): string {

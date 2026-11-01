@@ -7,6 +7,13 @@ export default defineConfig({
   plugins: [swc.vite({ module: { type: 'es6' } })],
   test: {
     environment: 'node',
-    include: ['src/**/*.spec.ts', 'test/**/*.e2e-spec.ts'],
+    projects: [
+      { extends: true, test: { name: 'unit', include: ['src/**/*.spec.ts'] } },
+      {
+        extends: true,
+        // Os E2E dividem um banco e o apagam entre os testes: um arquivo por vez.
+        test: { name: 'e2e', include: ['test/**/*.e2e-spec.ts'], fileParallelism: false },
+      },
+    ],
   },
 });
