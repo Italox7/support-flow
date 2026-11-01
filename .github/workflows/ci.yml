@@ -36,6 +36,8 @@ jobs:
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/support_flow?schema=public
       DIRECT_URL: postgresql://postgres:postgres@localhost:5432/support_flow?schema=public
+      # Habilita os testes E2E, que apagam as tabelas entre um teste e outro.
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/support_flow?schema=public
 
     steps:
       - uses: actions/checkout@v7

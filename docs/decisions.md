@@ -2,6 +2,29 @@
 
 Registro curto das decisões que não são óbvias pelo código. A mais recente fica no topo.
 
+## 2026-10-29 — Autenticação (Fase 2)
+
+- **Negado por padrão**: `JwtAuthGuard` e `RolesGuard` são globais; rota aberta precisa de
+  `@Public()`. Esquecer o decorator gera 401, não um endpoint exposto.
+- **Papel no access token**: rebaixar alguém só vale no próximo refresh (até 15 min). Aceito
+  para não consultar o banco a cada requisição.
+- **Reuso de refresh token revoga a família**, inclusive quando duas abas fazem refresh ao mesmo
+  tempo com o mesmo cookie. O front (Fase 6) precisa serializar o refresh numa única requisição.
+- **Expiração deslizante**: cada rotação dá mais 7 dias; sessão ativa não expira. Tokens
+  expirados e revogados ficam no banco até um job de limpeza (Fase 7).
+- **Cookie sempre `Secure`**, inclusive em dev (navegadores aceitam em `http://localhost`).
+- **Cadastro revela se o e-mail existe** (409): troca consciente por uma mensagem útil num help
+  desk. O login não revela (mesma resposta e mesmo custo de argon2 para e-mail inexistente).
+- **argon2id com 19 MiB / t=2** (mínimo OWASP): o padrão da lib (64 MiB) pesa no Render gratuito.
+- **Rate limit em memória** (5/min em login e cadastro, 30/min no resto de `/auth`), por IP. Atrás
+  de Vercel + Render, `TRUST_PROXY` precisa do número certo de proxies (Fase 7); com 0, todos os
+  usuários compartilham o IP do proxy e o limite.
+- **Seed do admin não promove conta existente**: se o e-mail já pertence a um não-admin, o seed
+  falha em vez de dar o papel a quem escolheu aquela senha.
+- **E2E só rodam com `TEST_DATABASE_URL`**: eles apagam as tabelas, então nunca usam a
+  `DATABASE_URL` do `.env` (Supabase). Se ela apontar para um host não local, a suíte falha
+  antes de conectar.
+
 ## 2026-10-23 — RLS ligado em todas as tabelas (deny-all)
 
 O Supabase expõe o schema `public` pela Data API (PostgREST) com a anon key, que é pública. Toda

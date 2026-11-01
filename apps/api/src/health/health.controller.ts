@@ -1,7 +1,9 @@
 import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
+import { Public } from '../auth/auth.decorators.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 /** Usado pelo health check do Render e pelo aviso "acordando o servidor" do front. */
+@Public()
 @Controller('health')
 export class HealthController {
   constructor(private readonly prisma: PrismaService) {}

@@ -6,7 +6,7 @@ import { parseDatabaseUrl } from './database-url.js';
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
-  constructor(@Inject(ENV) env: Env) {
+  constructor(@Inject(ENV) env: Pick<Env, 'DATABASE_URL'>) {
     const { connectionString, schema } = parseDatabaseUrl(env.DATABASE_URL);
     super({ adapter: new PrismaPg({ connectionString }, { schema }) });
   }
