@@ -42,7 +42,9 @@ export async function createApp(options: { throttle: boolean }): Promise<NestExp
     .overrideProvider(ENV)
     .useValue(env);
   if (!options.throttle) {
-    builder = builder.overrideGuard(ThrottlerGuard).useValue({ canActivate: () => true });
+    // overrideProvider, não overrideGuard: o ThrottlerGuard global é um provider
+    // (APP_GUARD com useExisting), e overrideGuard só troca os de @UseGuards.
+    builder = builder.overrideProvider(ThrottlerGuard).useValue({ canActivate: () => true });
   }
   const app = (await builder.compile()).createNestApplication<NestExpressApplication>();
   configureApp(app, env);
