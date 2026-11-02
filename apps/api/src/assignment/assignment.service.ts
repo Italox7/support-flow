@@ -1,4 +1,4 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { OPEN_STATUSES } from '@support-flow/shared';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -57,6 +57,8 @@ export interface AgentWithLoad extends AgentLoad {
 
 @Injectable()
 export class AssignmentService {
+  private readonly logger = new Logger(AssignmentService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   /**
@@ -66,11 +68,16 @@ export class AssignmentService {
    */
   inLock<T>(fn: (tx: LockedTx) => Promise<T>): Promise<T> {
     return this.prisma.$transaction(async (tx) => {
-      // `true`: vale só para esta transação, inclusive atrás do pooler.
+      // `true`: vale só para esta transação, inclusive atrás do pooler. Vale
+      // também para os locks de linha dentro de `fn`: uma espera de mais de 2 s
+      // ali (rara, contra uma transição) sobe como erro 500, não 503.
       await tx.$executeRaw`SELECT set_config('lock_timeout', ${LOCK_TIMEOUT}, true)`;
       try {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(${ASSIGNMENT_LOCK_KEY}::bigint)`;
-      } catch {
+      } catch (error) {
+        // Quase sempre é o lock_timeout; uma queda do banco também cai aqui,
+        // então o erro original fica no log.
+        this.logger.warn(`Lock da atribuição indisponível: ${String(error)}`);
         throw new ServiceUnavailableException(
           'O sistema está ocupado. Tente de novo em instantes.',
         );

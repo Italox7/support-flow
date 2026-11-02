@@ -46,7 +46,25 @@ describe.skipIf(!TEST_DATABASE_URL)('atribuição (e2e)', () => {
     await prisma.ticket.update({ where: { id }, data });
   }
 
-  /** Segura o lock da atribuição numa transação do próprio teste enquanto `run` roda. */
+  /**
+   * Espera até alguma requisição estar na fila do advisory lock. Prova a
+   * espera em vez de só a ausência do ticket depois de um tempo arbitrário.
+   */
+  async function waitForLockWaiter(): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const [{ waiting }] = await prisma.$queryRaw<[{ waiting: number }]>`
+        SELECT count(*)::int AS waiting FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`;
+      if (waiting > 0) return;
+      await sleep(20);
+    }
+    throw new Error('Nenhuma requisição entrou na fila do lock da atribuição.');
+  }
+
+  /**
+   * Segura o lock da atribuição numa transação do próprio teste enquanto `run`
+   * roda. Ela usa uma conexão do mesmo pool da API, o que só travaria com pool 1.
+   */
   async function withLockHeld(run: () => Promise<void>): Promise<void> {
     await prisma.$transaction(
       async (tx) => {
@@ -129,12 +147,17 @@ describe.skipIf(!TEST_DATABASE_URL)('atribuição (e2e)', () => {
       const agent = await agentNamed('agente');
 
       let pending: Promise<TicketDetail> | undefined;
-      await withLockHeld(async () => {
-        pending = openTicket();
-        await sleep(300);
-        expect(await prisma.ticket.count()).toBe(0);
-      });
-      expect((await pending)?.assignee?.id).toBe(agent.id);
+      try {
+        await withLockHeld(async () => {
+          pending = openTicket();
+          await waitForLockWaiter();
+          expect(await prisma.ticket.count()).toBe(0);
+        });
+        expect((await pending)?.assignee?.id).toBe(agent.id);
+      } finally {
+        // Se um expect falhar no meio, o POST ainda conclui depois: não deixa a promise solta.
+        await pending?.catch(() => undefined);
+      }
     });
 
     it(
@@ -341,6 +364,16 @@ describe.skipIf(!TEST_DATABASE_URL)('atribuição (e2e)', () => {
       await reassign(agent, { priority: 'URGENT', assigneeId: other.id }).expect(403);
       const stored = await prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
       expect(stored).toMatchObject({ priority: 'MEDIUM', assigneeId: agent.id });
+    });
+
+    it('quem não pode alterar recebe 403/404 sem entrar na fila do lock', async () => {
+      const foreign = await openTicket(otherCustomer);
+      // Com o lock seguro, quem entrasse na fila esperaria 2 s e receberia 503.
+      await withLockHeld(async () => {
+        await reassign(customer, { priority: 'URGENT' }).expect(403);
+        await reassign(customer, { priority: 'URGENT' }, foreign.id).expect(404);
+        await reassign(agent, { assigneeId: other.id }).expect(403);
+      });
     });
 
     it('o cliente recebe 403 no próprio ticket e 404 no de outro', async () => {

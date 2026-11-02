@@ -42,8 +42,11 @@ Desenho revisado pelo Archie antes do código.
 - **Fora desta fase**: criar agente (`POST /users/agents`, antes da Fase 6, com o Gard) e
   `POST /jobs/run` (Fase 7). Até lá, agentes vêm do seed ou do banco.
 - **Pendências registradas pelo Gard**:
-  - limite por usuário no `POST /tickets` é **pré-requisito do deploy** (o cadastro é aberto
-    e cada criação entra na fila do lock);
+  - limite por usuário no `POST /tickets` **bloqueia o deploy** (P1 a partir dele: o
+    cadastro é aberto e cada criação entra na fila do lock). O PATCH do ticket já checa
+    escopo e papel antes da fila: cliente e agente sem permissão não a ocupam;
+  - o 503 do lock não manda `Retry-After`: o front (Fase 6) tenta de novo com espera;
+  - esperar mais que o `maxWait` por uma conexão do pool vira 500, não 503;
   - rebaixar um agente (quando houver troca de papel) tem de reatribuir os tickets dele e
     revogar os refresh tokens;
   - `isAvailable` nasce `true` em todo usuário; o filtro `role: AGENT` está em toda consulta

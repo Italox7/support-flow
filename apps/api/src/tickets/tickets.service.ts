@@ -121,17 +121,21 @@ export class TicketsService {
    * responsável é só do admin e não mexe no status. Os dois campos valem juntos
    * ou nada vale. Erros: 400 → 404 → 403 → 409 → 422.
    */
-  update(user: RequestUser, id: string, dto: UpdateTicketDto): Promise<TicketDetail> {
+  async update(user: RequestUser, id: string, dto: UpdateTicketDto): Promise<TicketDetail> {
     if (dto.priority === undefined && dto.assigneeId === undefined) {
       throw new BadRequestException('Informe priority ou assigneeId.');
     }
-    // A troca de responsável muda a carga; a rota inteira roda sob o lock da atribuição.
+    // 404 e 403 antes da fila do lock: quem não pode alterar o ticket não ocupa
+    // a fila de criação. O escopo vem antes do papel, como em toda rota.
+    await this.findScoped(this.prisma, user, id);
+    if (!isStaff(user)) throw new ForbiddenException('Só a equipe de suporte altera o ticket.');
+    if (dto.assigneeId !== undefined && user.role !== 'ADMIN') {
+      throw new ForbiddenException('Só o admin troca o responsável.');
+    }
+
+    // A troca de responsável muda a carga; a escrita roda sob o lock da atribuição.
     return this.assignment.inLock(async (tx) => {
       const ticket = await this.findScoped(tx, user, id);
-      if (!isStaff(user)) throw new ForbiddenException('Só a equipe de suporte altera o ticket.');
-      if (dto.assigneeId !== undefined && user.role !== 'ADMIN') {
-        throw new ForbiddenException('Só o admin troca o responsável.');
-      }
       if (ticket.status === 'CLOSED') throw new ConflictException('Ticket fechado.');
 
       const data: Prisma.TicketUncheckedUpdateManyInput = {};
