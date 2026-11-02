@@ -53,8 +53,13 @@ describe.skipIf(!TEST_DATABASE_URL)('atribuição (e2e)', () => {
   async function waitForLockWaiter(): Promise<void> {
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
+      // Lock de chave bigint: os 32 bits altos vão em classid, os baixos em objid
+      // e objsubid é 1. Filtrar pela chave ignora outros advisory locks do banco.
       const [{ waiting }] = await prisma.$queryRaw<[{ waiting: number }]>`
-        SELECT count(*)::int AS waiting FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`;
+        SELECT count(*)::int AS waiting FROM pg_locks
+        WHERE locktype = 'advisory' AND NOT granted AND objsubid = 1
+          AND classid = (${ASSIGNMENT_LOCK_KEY}::bigint >> 32)::oid
+          AND objid = (${ASSIGNMENT_LOCK_KEY}::bigint & 4294967295)::oid`;
       if (waiting > 0) return;
       await sleep(20);
     }
