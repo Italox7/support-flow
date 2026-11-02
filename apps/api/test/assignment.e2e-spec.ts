@@ -1,7 +1,9 @@
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import type { AgentSummary, TicketDetail } from '@support-flow/shared';
+import { setTimeout as sleep } from 'node:timers/promises';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { ASSIGNMENT_LOCK_KEY } from '../src/assignment/assignment.service.js';
 import type { Prisma } from '../src/generated/prisma/client.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
 import {
@@ -13,6 +15,7 @@ import {
 } from './e2e-setup.js';
 
 const MISSING = '00000000-0000-4000-8000-000000000000';
+const HOUR = 60 * 60 * 1000;
 
 describe.skipIf(!TEST_DATABASE_URL)('atribuição (e2e)', () => {
   let app: NestExpressApplication;
@@ -41,6 +44,17 @@ describe.skipIf(!TEST_DATABASE_URL)('atribuição (e2e)', () => {
 
   async function setTicket(id: string, data: Prisma.TicketUpdateInput): Promise<void> {
     await prisma.ticket.update({ where: { id }, data });
+  }
+
+  /** Segura o lock da atribuição numa transação do próprio teste enquanto `run` roda. */
+  async function withLockHeld(run: () => Promise<void>): Promise<void> {
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${ASSIGNMENT_LOCK_KEY}::bigint)`;
+        await run();
+      },
+      { timeout: 10_000 },
+    );
   }
 
   const assigneeOf = async (id: string) =>
@@ -103,7 +117,41 @@ describe.skipIf(!TEST_DATABASE_URL)('atribuição (e2e)', () => {
       // Nunca receberam: decide o id. Depois, a carga e o lastAssignedAt alternam.
       const [firstPick, secondPick] = [first.id, second.id].sort();
       expect(assignees).toEqual([firstPick, secondPick, firstPick, secondPick]);
+
+      const cursors = await prisma.user.findMany({
+        where: { id: { in: [first.id, second.id] } },
+        select: { lastAssignedAt: true },
+      });
+      for (const { lastAssignedAt } of cursors) expect(lastAssignedAt).not.toBeNull();
     });
+
+    it('a criação espera quem segura o lock da atribuição', async () => {
+      const agent = await agentNamed('agente');
+
+      let pending: Promise<TicketDetail> | undefined;
+      await withLockHeld(async () => {
+        pending = openTicket();
+        await sleep(300);
+        expect(await prisma.ticket.count()).toBe(0);
+      });
+      expect((await pending)?.assignee?.id).toBe(agent.id);
+    });
+
+    it(
+      'sem o lock em 2 s, a criação recebe 503 e não grava nada',
+      { timeout: 15_000 },
+      async () => {
+        await agentNamed('agente');
+
+        await withLockHeld(async () => {
+          await as(customer)
+            .post('/api/tickets')
+            .send({ title: 'Na fila', description: 'Esperando o lock.' })
+            .expect(503);
+        });
+        expect(await prisma.ticket.count()).toBe(0);
+      },
+    );
 
     it('tickets simultâneos não veem a mesma carga: a divisão fica equilibrada', async () => {
       await agentNamed('a');
@@ -155,6 +203,25 @@ describe.skipIf(!TEST_DATABASE_URL)('atribuição (e2e)', () => {
 
       await as(second).patch('/api/users/me/availability').send({ isAvailable: true }).expect(200);
       expect(await loads()).toEqual({ a: 2, b: 2 });
+    });
+
+    it('a varredura atribui até 100 órfãos, os de prazo mais curto primeiro', async () => {
+      const agent = await agentNamed('agente', false);
+      const base = Date.now();
+      // #0 tem o prazo mais folgado e é inserido primeiro: só a ordem por prazo o deixa de fora.
+      await prisma.ticket.createMany({
+        data: Array.from({ length: 101 }, (_, i) => ({
+          title: `#${i}`,
+          description: 'órfão',
+          requesterId: customer.id,
+          firstResponseDueAt: new Date(base + (101 - i) * HOUR),
+          resolutionDueAt: new Date(base + (101 - i) * 2 * HOUR),
+        })),
+      });
+
+      await as(agent).patch('/api/users/me/availability').send({ isAvailable: true }).expect(200);
+      const left = await prisma.ticket.findMany({ where: { assigneeId: null } });
+      expect(left.map((ticket) => ticket.title)).toEqual(['#0']);
     });
 
     it('ficar indisponível mantém os tickets e tira o agente da fila', async () => {

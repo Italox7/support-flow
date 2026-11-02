@@ -12,11 +12,20 @@ Desenho revisado pelo Archie antes do código.
   passar uma transação sem o lock não compila. Lock de transação funciona no pooler do
   Supabase em modo transação; um lock de sessão não funcionaria. Lock por linha
   (`FOR UPDATE` nos agentes) arriscaria deadlock sem ganho nesta escala.
-- **Pegam o lock**: criação de ticket, mudança de disponibilidade e `PATCH /tickets/:id`.
+- **Pegam o lock**: criação de ticket, mudança de disponibilidade e `PATCH /tickets/:id`
+  (mesmo só de prioridade: um caminho só vale mais que os milissegundos de fila).
   Transições não pegam: um ticket resolvido ou reaberto ao mesmo tempo deixa a carga lida
   defasada em 1 (escolha um pouco pior), nunca dois tickets vendo a mesma carga.
+- **Espera pelo lock de no máximo 2 s** (`lock_timeout` local da transação), depois 503. Quem
+  espera ocupa uma conexão do pool: sem o limite, ~10 criações simultâneas esgotariam o pool
+  e parariam a API inteira, `/api/health` incluído. O PATCH de disponibilidade tem 10/min,
+  porque ficar disponível varre órfãos segurando o lock.
+- **O PATCH do ticket é otimista**: só grava se `status` e `pausedSeconds` ainda forem os
+  lidos, senão 409. Pré-condição da Fase 5, em que a pausa e a retomada do SLA mudam esses
+  campos sem o lock.
 - **"Em aberto" tem uma definição só**: `OPEN_STATUSES` em `packages/shared` (OPEN,
-  IN_PROGRESS, WAITING_CUSTOMER). WAITING_CUSTOMER conta como carga.
+  IN_PROGRESS, WAITING_CUSTOMER). WAITING_CUSTOMER conta como carga. Não é o conjunto em
+  que o SLA corre (lá ele está pausado): a Fase 5 define o seu.
 - **Ficar indisponível não redistribui**: o agente mantém os tickets e só sai da fila.
   Ficar disponível distribui os órfãos abertos na mesma transação, os de prazo mais curto
   primeiro, até 100 por vez; o resto espera o job diário (Fase 7). Se só um agente voltar,
@@ -32,6 +41,14 @@ Desenho revisado pelo Archie antes do código.
   `no-restricted-imports` no ESLint).
 - **Fora desta fase**: criar agente (`POST /users/agents`, antes da Fase 6, com o Gard) e
   `POST /jobs/run` (Fase 7). Até lá, agentes vêm do seed ou do banco.
+- **Pendências registradas pelo Gard**:
+  - limite por usuário no `POST /tickets` é **pré-requisito do deploy** (o cadastro é aberto
+    e cada criação entra na fila do lock);
+  - rebaixar um agente (quando houver troca de papel) tem de reatribuir os tickets dele e
+    revogar os refresh tokens;
+  - `isAvailable` nasce `true` em todo usuário; o filtro `role: AGENT` está em toda consulta
+    da atribuição. Default `false` ou um CHECK no banco pedem migration.
+  - `lock_timeout` e tamanho do pool: medir com o Pipe no staging (Fase 7).
 
 ## 2026-11-01 — Tickets e comentários (Fase 3)
 

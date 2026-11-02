@@ -19,8 +19,9 @@ export const TicketStatus = {
 export type TicketStatus = (typeof TicketStatus)[keyof typeof TicketStatus];
 
 /**
- * Ticket "em aberto": conta como carga do responsável na atribuição e, sem
- * responsável, é um órfão. Definição única, usada também pelo SLA.
+ * Ticket "em aberto" para a atribuição: conta como carga do responsável e, sem
+ * responsável, é um órfão. Não é o conjunto em que o SLA corre (em
+ * WAITING_CUSTOMER ele está pausado): o SLA tem o seu.
  */
 export const OPEN_STATUSES = [
   TicketStatus.OPEN,

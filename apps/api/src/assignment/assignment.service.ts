@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { OPEN_STATUSES } from '@support-flow/shared';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -18,7 +18,14 @@ declare const locked: unique symbol;
 export type LockedTx = Db & { readonly [locked]: true };
 
 /** Chave arbitrária: nenhum outro código usa advisory lock neste banco. */
-const ASSIGNMENT_LOCK_KEY = 7_340_001;
+export const ASSIGNMENT_LOCK_KEY = 7_340_001;
+
+/**
+ * Espera máxima pelo lock. Quem espera ocupa uma conexão do pool: sem esse
+ * limite, uma rajada de criações esgotaria o pool e pararia a API inteira
+ * (health check incluído). Melhor um 503 rápido.
+ */
+const LOCK_TIMEOUT = '2s';
 
 /**
  * Toda criação de ticket entra nesta fila. `maxWait` é a espera por uma conexão
@@ -59,7 +66,15 @@ export class AssignmentService {
    */
   inLock<T>(fn: (tx: LockedTx) => Promise<T>): Promise<T> {
     return this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${ASSIGNMENT_LOCK_KEY}::bigint)`;
+      // `true`: vale só para esta transação, inclusive atrás do pooler.
+      await tx.$executeRaw`SELECT set_config('lock_timeout', ${LOCK_TIMEOUT}, true)`;
+      try {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${ASSIGNMENT_LOCK_KEY}::bigint)`;
+      } catch {
+        throw new ServiceUnavailableException(
+          'O sistema está ocupado. Tente de novo em instantes.',
+        );
+      }
       return fn(tx as LockedTx);
     }, LOCKED_TX_OPTIONS);
   }

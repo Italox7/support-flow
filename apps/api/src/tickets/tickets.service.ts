@@ -77,8 +77,10 @@ export class TicketsService {
    */
   create(user: RequestUser, dto: CreateTicketDto): Promise<TicketDetail> {
     const priority = dto.priority ?? 'MEDIUM';
-    const createdAt = new Date();
     return this.assignment.inLock(async (tx) => {
+      // Lido depois do lock: quem esperou na fila não grava um lastAssignedAt
+      // mais antigo que o de quem passou antes.
+      const createdAt = new Date();
       const assigneeId = await this.assignment.assignNew(tx, createdAt);
       const policy = await tx.slaPolicy.findUniqueOrThrow({ where: { priority } });
       const ticket = await tx.ticket.create({
@@ -146,12 +148,16 @@ export class TicketsService {
         data.assigneeId = dto.assigneeId;
       }
 
-      // O fechamento (job) não pega o lock: o update só vale se o ticket seguir aberto.
+      // Transições não pegam o lock: o update só vale se o status e a pausa do
+      // SLA ainda forem os lidos, senão os prazos recalculados apagariam uma
+      // pausa ou retomada gravada no meio tempo.
       const { count } = await tx.ticket.updateMany({
-        where: { id, status: { not: 'CLOSED' } },
+        where: { id, status: ticket.status, pausedSeconds: ticket.pausedSeconds },
         data,
       });
-      if (count === 0) throw new ConflictException('Ticket fechado.');
+      if (count === 0) {
+        throw new ConflictException('O ticket mudou enquanto isso. Recarregue e tente de novo.');
+      }
       return toTicketDetail(
         await tx.ticket.findUniqueOrThrow({ where: { id }, include: ticketInclude }),
       );
