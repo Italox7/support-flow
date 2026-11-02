@@ -362,7 +362,10 @@ describe.skipIf(!TEST_DATABASE_URL)('SLA (e2e)', () => {
           [() => as(agent).post(`/api/tickets/${ticket.id}/comments`).send({ body: 'Olhando.' })],
           async (tx) => {
             const current = await tx.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
-            expect(await tickets.applyTransition(tx, current, 'WAITING_CUSTOMER', new Date())).toBe(
+            // O comentário marca o horário antes de parar na linha; a pausa vem com
+            // horário anterior a ele, para a resposta cair de fato dentro da pausa.
+            const pausedAt = new Date(Date.now() - 30 * MIN);
+            expect(await tickets.applyTransition(tx, current, 'WAITING_CUSTOMER', pausedAt)).toBe(
               true,
             );
           },
@@ -372,9 +375,12 @@ describe.skipIf(!TEST_DATABASE_URL)('SLA (e2e)', () => {
         const after = await stored(ticket.id);
         expect(after.status).toBe('WAITING_CUSTOMER');
         expect(after.firstResponseAt).not.toBeNull();
-        // Empurrado exatamente pelo tempo entre a pausa e a resposta.
+        // A 1ª tentativa perdeu (guarda slaPausedAt nulo); a releitura empurrou o
+        // prazo exatamente pelo tempo entre a pausa e a resposta.
+        const pushedBy = after.firstResponseAt!.getTime() - after.slaPausedAt!.getTime();
+        expect(pushedBy).toBeGreaterThan(29 * MIN);
         expect(after.firstResponseDueAt.getTime() - before.firstResponseDueAt.getTime()).toBe(
-          after.firstResponseAt!.getTime() - after.slaPausedAt!.getTime(),
+          pushedBy,
         );
         const sla = (await as(agent).get(`/api/tickets/${ticket.id}`).expect(200)).body.sla;
         expect(sla.firstResponse.state).toBe('MET');
