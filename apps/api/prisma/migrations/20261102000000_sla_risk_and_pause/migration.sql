@@ -7,12 +7,17 @@
 --    de prioridade ou de responsável também mexe nele (risco aceito em
 --    docs/decisions.md).
 UPDATE "tickets"
-SET "slaPausedAt" = COALESCE("resolvedAt", "updatedAt")
+SET "slaPausedAt" = COALESCE("resolvedAt", "closedAt", "updatedAt")
 WHERE "status" IN ('RESOLVED', 'CLOSED') AND "slaPausedAt" IS NULL;
 
 UPDATE "tickets"
 SET "slaPausedAt" = "updatedAt"
 WHERE "status" = 'WAITING_CUSTOMER' AND "slaPausedAt" IS NULL;
+
+-- Relógio correndo não tem pausa: limpa sobra de SQL à mão, senão o CHECK abaixo falharia.
+UPDATE "tickets"
+SET "slaPausedAt" = NULL
+WHERE "status" IN ('OPEN', 'IN_PROGRESS') AND "slaPausedAt" IS NOT NULL;
 
 -- 2. *RiskAt = início + round(80% do prazo em ms), com início = abertura + pausas.
 ALTER TABLE "tickets"

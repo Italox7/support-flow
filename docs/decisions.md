@@ -24,6 +24,9 @@ Desenho revisado pelo Archie antes do código.
   prazos. Invariante: enquanto não há 1ª resposta, prazos gravados =
   `computeDeadlines(createdAt, política, pausedSeconds)`. Um CHECK no banco garante
   `slaPausedAt` presente se e só se o relógio não corre (fica fora do `schema.prisma`).
+  Uma migration que recrie a coluna `status` ou mude o enum precisa dropar e recriar o
+  CHECK nela mesma. O CHECK e os `*RiskAt` NOT NULL quebram código antigo que grave
+  tickets: aplicar com a API antiga parada (em produção, expand/contract se precisar).
 - **A 1ª resposta congela o prazo dela**: retomada e troca de prioridade não mexem mais
   nele, senão uma pausa posterior viraria um BREACHED antigo em MET. Se a resposta chega
   com o ticket pausado, o prazo recebe a parte da pausa já decorrida: o "cumpriu?" é
