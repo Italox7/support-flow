@@ -44,5 +44,7 @@ export const SlaState = {
   BREACHED: 'BREACHED',
   MET: 'MET',
   PAUSED: 'PAUSED',
+  /** 1ª resposta de um ticket resolvido ou fechado sem resposta da equipe, antes do prazo. */
+  NOT_APPLICABLE: 'NOT_APPLICABLE',
 } as const;
 export type SlaState = (typeof SlaState)[keyof typeof SlaState];

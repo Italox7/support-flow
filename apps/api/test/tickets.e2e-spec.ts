@@ -11,6 +11,7 @@ import {
   resetDatabase,
   TEST_DATABASE_URL,
   type Actor,
+  withSlaClock,
 } from './e2e-setup.js';
 
 const HOUR = 60 * 60 * 1000;
@@ -48,7 +49,7 @@ describe.skipIf(!TEST_DATABASE_URL)('tickets (e2e)', () => {
 
   /** Coloca o ticket num estado direto pelo banco, sem passar pelas regras. */
   async function setTicket(id: string, data: Prisma.TicketUpdateInput): Promise<void> {
-    await prisma.ticket.update({ where: { id }, data });
+    await prisma.ticket.update({ where: { id }, data: withSlaClock(data) });
   }
 
   beforeAll(async () => {
@@ -320,9 +321,9 @@ describe.skipIf(!TEST_DATABASE_URL)('tickets (e2e)', () => {
 
     it('applyTransition recusa um status lido que já mudou no banco', async () => {
       const ticket = await openTicket(customer);
+      const stale = await prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
       await setTicket(ticket.id, { status: 'WAITING_CUSTOMER' });
 
-      const stale = { id: ticket.id, status: 'OPEN' as const };
       const tickets = app.get(TicketsService);
       expect(await tickets.applyTransition(prisma, stale, 'IN_PROGRESS', new Date())).toBe(false);
 

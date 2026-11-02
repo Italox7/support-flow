@@ -4,14 +4,15 @@ import type { AssignmentService } from '../assignment/assignment.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import { TicketsService } from './tickets.service.js';
 
-// A corrida real (PATCH contra uma pausa do SLA) entra nos E2E da Fase 5, quando
-// pausedSeconds passar a mudar. Aqui fica o mapeamento: update perdido → 409.
+// A corrida real (PATCH contra pausa, retomada e 1ª resposta) está em
+// test/sla.e2e-spec.ts. Aqui fica o mapeamento: update perdido → 409.
 
 const admin = { id: 'admin-id', role: 'ADMIN' as const };
 const stored = {
   id: 'ticket-id',
   status: 'WAITING_CUSTOMER',
   pausedSeconds: 600,
+  firstResponseAt: null,
   createdAt: new Date('2026-11-01T12:00:00.000Z'),
 };
 
@@ -39,7 +40,7 @@ function serviceWith(updated: number) {
 }
 
 describe('TicketsService.update', () => {
-  it('só grava se o status e a pausa do SLA ainda forem os lidos', async () => {
+  it('só grava se o status, a pausa do SLA e a falta da 1ª resposta ainda forem os lidos', async () => {
     const { service, tx } = serviceWith(0);
 
     await expect(
@@ -47,7 +48,12 @@ describe('TicketsService.update', () => {
     ).rejects.toBeInstanceOf(ConflictException);
     expect(tx.ticket.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: stored.id, status: 'WAITING_CUSTOMER', pausedSeconds: 600 },
+        where: {
+          id: stored.id,
+          status: 'WAITING_CUSTOMER',
+          firstResponseAt: null,
+          pausedSeconds: 600,
+        },
       }),
     );
   });

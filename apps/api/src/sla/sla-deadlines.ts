@@ -5,8 +5,16 @@ export interface SlaPolicyMinutes {
 
 export interface SlaDeadlines {
   firstResponseDueAt: Date;
+  firstResponseRiskAt: Date;
   resolutionDueAt: Date;
+  resolutionRiskAt: Date;
 }
+
+/**
+ * Fração do prazo a partir da qual o ticket fica "em risco". Fica gravada nos
+ * *RiskAt: mudar o valor exige uma migration que recalcule os tickets existentes.
+ */
+export const AT_RISK_SHARE = 0.8;
 
 /**
  * Prazos de 1ª resposta e de resolução, em horas corridas a partir da abertura,
@@ -19,8 +27,13 @@ export function computeDeadlines(
   pausedSeconds = 0,
 ): SlaDeadlines {
   const start = createdAt.getTime() + pausedSeconds * 1000;
+  const due = (minutes: number) => new Date(start + minutes * 60_000);
+  // Mesmo arredondamento (ms inteiros) da migration que preencheu os tickets antigos.
+  const risk = (minutes: number) => new Date(start + Math.round(minutes * 60_000 * AT_RISK_SHARE));
   return {
-    firstResponseDueAt: new Date(start + policy.firstResponseMinutes * 60_000),
-    resolutionDueAt: new Date(start + policy.resolutionMinutes * 60_000),
+    firstResponseDueAt: due(policy.firstResponseMinutes),
+    firstResponseRiskAt: risk(policy.firstResponseMinutes),
+    resolutionDueAt: due(policy.resolutionMinutes),
+    resolutionRiskAt: risk(policy.resolutionMinutes),
   };
 }

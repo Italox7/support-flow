@@ -1,4 +1,4 @@
-import type { Priority, Role, TicketStatus } from './enums.js';
+import type { Priority, Role, SlaState, TicketStatus } from './enums.js';
 
 // Respostas da API de tickets. Datas chegam como string ISO 8601 (é o que o
 // JSON carrega); quem precisar de Date converte no cliente.
@@ -6,6 +6,23 @@ import type { Priority, Role, TicketStatus } from './enums.js';
 export interface UserSummary {
   id: string;
   name: string;
+}
+
+/** Um relógio de SLA (1ª resposta ou resolução), calculado no instante da resposta. */
+export interface SlaClock {
+  state: SlaState;
+  /** Com o relógio pausado, ainda muda: a retomada empurra o prazo pelo tempo parado. */
+  dueAt: string;
+  /**
+   * Segundos do instante de referência até o prazo: agora (relógio correndo), a
+   * pausa (pausado) ou o cumprimento. Negativo quando estourou.
+   */
+  remainingSeconds: number;
+}
+
+export interface TicketSla {
+  firstResponse: SlaClock;
+  resolution: SlaClock;
 }
 
 export interface TicketSummary {
@@ -19,6 +36,8 @@ export interface TicketSummary {
   assignee: UserSummary | null;
   createdAt: string;
   updatedAt: string;
+  /** Presente só para AGENT/ADMIN: o SLA é compromisso interno da equipe. */
+  sla?: TicketSla;
 }
 
 export interface TicketDetail extends TicketSummary {
@@ -44,4 +63,12 @@ export interface Paginated<T> {
   page: number;
   pageSize: number;
   total: number;
+}
+
+/** Prazos em minutos corridos. Editar vale para tickets novos e para trocas de prioridade. */
+export interface SlaPolicyDto {
+  priority: Priority;
+  firstResponseMinutes: number;
+  resolutionMinutes: number;
+  updatedAt: string;
 }

@@ -113,6 +113,12 @@ describe('commentEffects', () => {
     });
   });
 
+  it('resposta em RESOLVED não vira 1ª resposta: o veredito do SLA está fechado', () => {
+    expect(commentEffects(ticket({ status: 'RESOLVED' }), agent, false)).toEqual({
+      setFirstResponseAt: false,
+    });
+  });
+
   it('resposta do agente responsável tira o ticket de OPEN', () => {
     expect(commentEffects(ticket({ status: 'OPEN' }), agent, false)).toEqual({
       setFirstResponseAt: true,

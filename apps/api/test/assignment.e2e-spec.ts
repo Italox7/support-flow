@@ -12,6 +12,7 @@ import {
   resetDatabase,
   TEST_DATABASE_URL,
   type Actor,
+  withSlaClock,
 } from './e2e-setup.js';
 
 const MISSING = '00000000-0000-4000-8000-000000000000';
@@ -43,7 +44,7 @@ describe.skipIf(!TEST_DATABASE_URL)('atribuição (e2e)', () => {
   }
 
   async function setTicket(id: string, data: Prisma.TicketUpdateInput): Promise<void> {
-    await prisma.ticket.update({ where: { id }, data });
+    await prisma.ticket.update({ where: { id }, data: withSlaClock(data) });
   }
 
   /**
@@ -53,8 +54,13 @@ describe.skipIf(!TEST_DATABASE_URL)('atribuição (e2e)', () => {
   async function waitForLockWaiter(): Promise<void> {
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
+      // Lock de chave bigint: os 32 bits altos vão em classid, os baixos em objid
+      // e objsubid é 1. Filtrar pela chave ignora outros advisory locks do banco.
       const [{ waiting }] = await prisma.$queryRaw<[{ waiting: number }]>`
-        SELECT count(*)::int AS waiting FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`;
+        SELECT count(*)::int AS waiting FROM pg_locks
+        WHERE locktype = 'advisory' AND NOT granted AND objsubid = 1
+          AND classid = (${ASSIGNMENT_LOCK_KEY}::bigint >> 32)::oid
+          AND objid = (${ASSIGNMENT_LOCK_KEY}::bigint & 4294967295)::oid`;
       if (waiting > 0) return;
       await sleep(20);
     }
@@ -238,7 +244,9 @@ describe.skipIf(!TEST_DATABASE_URL)('atribuição (e2e)', () => {
           description: 'órfão',
           requesterId: customer.id,
           firstResponseDueAt: new Date(base + (101 - i) * HOUR),
+          firstResponseRiskAt: new Date(base + (101 - i) * HOUR),
           resolutionDueAt: new Date(base + (101 - i) * 2 * HOUR),
+          resolutionRiskAt: new Date(base + (101 - i) * 2 * HOUR),
         })),
       });
 

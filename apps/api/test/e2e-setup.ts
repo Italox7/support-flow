@@ -9,6 +9,7 @@ import type { AccessTokenPayload } from '../src/auth/auth.types.js';
 import { ENV, loadEnv } from '../src/config/env.js';
 import type { Prisma } from '../src/generated/prisma/client.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
+import { SLA_RUNNING_STATUSES } from '../src/sla/sla-calculator.js';
 
 // Base comum dos testes E2E.
 
@@ -81,4 +82,15 @@ export async function resetDatabase(prisma: PrismaService): Promise<void> {
   await prisma.comment.deleteMany();
   await prisma.ticket.deleteMany();
   await prisma.user.deleteMany();
+}
+
+/**
+ * Status gravado direto no banco, sem passar pelas regras, mas respeitando o
+ * CHECK do SLA: relógio parado tem `slaPausedAt`, relógio correndo não tem.
+ * Só entende `status` como string; `{ set: ... }` passa direto e o CHECK acusa.
+ */
+export function withSlaClock(data: Prisma.TicketUpdateInput): Prisma.TicketUpdateInput {
+  if (typeof data.status !== 'string' || data.slaPausedAt !== undefined) return data;
+  const running = SLA_RUNNING_STATUSES.includes(data.status);
+  return { ...data, slaPausedAt: running ? null : new Date() };
 }

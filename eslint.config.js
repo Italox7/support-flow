@@ -32,6 +32,24 @@ export default defineConfig(
     },
   },
   {
+    // Fronteira do SLA: regras puras que tickets/ usa; nunca o contrário.
+    files: ['apps/api/src/sla/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/tickets/**', '**/assignment/**', '**/users/**'],
+              message:
+                'sla/ não importa tickets/, assignment/ nem users/: eles é que dependem dele.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ['apps/web/src/**/*.{ts,tsx}'],
     languageOptions: { globals: globals.browser },
     plugins: { 'react-hooks': reactHooks, 'react-refresh': reactRefresh },

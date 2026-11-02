@@ -3,16 +3,31 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   UnprocessableEntityException,
   type HttpException,
 } from '@nestjs/common';
-import type { Paginated, TicketDetail, TicketStatus, TicketSummary } from '@support-flow/shared';
+import type {
+  Paginated,
+  SlaClock,
+  TicketDetail,
+  TicketStatus,
+  TicketSummary,
+} from '@support-flow/shared';
 import { AssignmentService } from '../assignment/assignment.service.js';
 import type { RequestUser } from '../auth/auth.types.js';
 import { Prisma, type Ticket } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import {
+  computeSla,
+  firstResponsePatch,
+  priorityChangePatch,
+  slaTransitionPatch,
+  type SlaClockResult,
+} from '../sla/sla-calculator.js';
 import { computeDeadlines } from '../sla/sla-deadlines.js';
+import { slaWhere } from '../sla/sla-filters.js';
 import {
   canTransition,
   commentEffects,
@@ -48,6 +63,11 @@ export class TicketsService {
 
   async list(user: RequestUser, query: ListTicketsQuery): Promise<Paginated<TicketSummary>> {
     const { page, pageSize } = query;
+    // O cliente não vê o SLA; filtrar por ele revelaria o estado do relógio.
+    if (query.sla && !isStaff(user)) {
+      throw new ForbiddenException('Só a equipe de suporte filtra por SLA.');
+    }
+    const now = new Date();
     const where: Prisma.TicketWhereInput = {
       AND: [
         ticketScope(user),
@@ -56,6 +76,7 @@ export class TicketsService {
           priority: query.priority && { in: query.priority },
           assigneeId: assigneeFilter(query.assigneeId, user),
         },
+        query.sla ? slaWhere(query.sla, now, this.prisma.ticket.fields) : {},
       ],
     };
     const [total, tickets] = await this.prisma.$transaction([
@@ -68,7 +89,12 @@ export class TicketsService {
         take: pageSize,
       }),
     ]);
-    return { items: tickets.map(toTicketSummary), page, pageSize, total };
+    return {
+      items: tickets.map((ticket) => toTicketSummary(ticket, user, now)),
+      page,
+      pageSize,
+      total,
+    };
   }
 
   /**
@@ -95,12 +121,12 @@ export class TicketsService {
         },
         include: ticketInclude,
       });
-      return toTicketDetail(ticket);
+      return toTicketDetail(ticket, user, createdAt);
     });
   }
 
   async findOne(user: RequestUser, id: string): Promise<TicketDetail> {
-    return toTicketDetail(await this.findScoped(this.prisma, user, id));
+    return toTicketDetail(await this.findScoped(this.prisma, user, id), user);
   }
 
   /**
@@ -139,10 +165,16 @@ export class TicketsService {
       if (ticket.status === 'CLOSED') throw new ConflictException('Ticket fechado.');
 
       const data: Prisma.TicketUncheckedUpdateManyInput = {};
+      const where: Prisma.TicketWhereInput = { id, status: ticket.status };
       if (dto.priority !== undefined) {
+        // O veredito de um ticket resolvido não muda depois: só reabrindo.
+        if (ticket.status === 'RESOLVED') {
+          throw new ConflictException('Ticket resolvido não muda de prioridade.');
+        }
         const policy = await tx.slaPolicy.findUniqueOrThrow({ where: { priority: dto.priority } });
-        data.priority = dto.priority;
-        Object.assign(data, computeDeadlines(ticket.createdAt, policy, ticket.pausedSeconds));
+        const sla = priorityChangePatch(ticket, policy);
+        Object.assign(data, { priority: dto.priority, ...sla.data });
+        Object.assign(where, sla.guard);
       }
       if (dto.assigneeId !== undefined) {
         // Pode ser um agente indisponível: é uma escolha explícita do admin.
@@ -152,11 +184,12 @@ export class TicketsService {
         data.assigneeId = dto.assigneeId;
       }
 
-      // Transições não pegam o lock: o update só vale se o status e a pausa do
-      // SLA ainda forem os lidos, senão os prazos recalculados apagariam uma
-      // pausa ou retomada gravada no meio tempo.
+      // Transições e comentários não pegam o lock: o update só vale se o status,
+      // a pausa do SLA e (ao recalcular a 1ª resposta) a falta dela ainda forem
+      // os lidos, senão os prazos recalculados apagariam uma pausa, uma retomada
+      // ou o congelamento da 1ª resposta gravados no meio tempo.
       const { count } = await tx.ticket.updateMany({
-        where: { id, status: ticket.status, pausedSeconds: ticket.pausedSeconds },
+        where: { ...where, pausedSeconds: ticket.pausedSeconds },
         data,
       });
       if (count === 0) {
@@ -164,6 +197,7 @@ export class TicketsService {
       }
       return toTicketDetail(
         await tx.ticket.findUniqueOrThrow({ where: { id }, include: ticketInclude }),
+        user,
       );
     });
   }
@@ -185,24 +219,22 @@ export class TicketsService {
       }
       return toTicketDetail(
         await tx.ticket.findUniqueOrThrow({ where: { id }, include: ticketInclude }),
+        user,
       );
     });
   }
 
   /**
-   * Único ponto que muda o status. O update só vale se o status ainda for o que
-   * foi lido: de duas mudanças simultâneas, uma passa e a outra recebe `false`.
-   * A pausa e a retomada do SLA (Fase 5) entram aqui.
+   * Único ponto que muda o status, e com ele a pausa e a retomada do SLA. O
+   * update só vale se o status ainda for o que foi lido (de duas mudanças
+   * simultâneas, uma passa e a outra recebe `false`) e, na retomada, se os
+   * prazos também forem: eles são regravados como valores absolutos.
    */
-  async applyTransition(
-    tx: Db,
-    ticket: Pick<Ticket, 'id' | 'status'>,
-    to: TicketStatus,
-    now: Date,
-  ): Promise<boolean> {
+  async applyTransition(tx: Db, ticket: Ticket, to: TicketStatus, now: Date): Promise<boolean> {
+    const sla = slaTransitionPatch(ticket.status, to, ticket, now);
     const { count } = await tx.ticket.updateMany({
-      where: { id: ticket.id, status: ticket.status },
-      data: { status: to, ...transitionPatch(ticket.status, to, now) },
+      where: { id: ticket.id, status: ticket.status, ...sla.guard },
+      data: { status: to, ...transitionPatch(ticket.status, to, now), ...sla.data },
     });
     return count === 1;
   }
@@ -217,15 +249,60 @@ export class TicketsService {
   ): Promise<void> {
     const effects = commentEffects(ticket, author, isInternal);
     if (effects.setFirstResponseAt) {
-      await tx.ticket.updateMany({
-        where: { id: ticket.id, firstResponseAt: null },
-        data: { firstResponseAt: now },
-      });
+      await retryOnce(
+        tx,
+        ticket,
+        'firstResponse',
+        async (current) => {
+          const { data, guard } = firstResponsePatch(current, now);
+          const { count } = await tx.ticket.updateMany({
+            where: { id: ticket.id, ...guard },
+            data,
+          });
+          return count === 1;
+        },
+        (current) => current.firstResponseAt === null,
+      );
     }
     // Se outra requisição já mudou o status, o efeito é descartado e o comentário fica.
-    if (effects.statusTo) await this.applyTransition(tx, ticket, effects.statusTo, now);
+    const { statusTo } = effects;
+    if (statusTo) {
+      await retryOnce(
+        tx,
+        ticket,
+        `status → ${statusTo}`,
+        (current) => this.applyTransition(tx, current, statusTo, now),
+        (current) => current.status === ticket.status,
+      );
+    }
   }
 }
+
+/**
+ * Efeito de comentário que perdeu a corrida para outra escrita (um PATCH mudou
+ * os prazos, o ticket pausou no meio): relê e tenta de novo uma vez, se o efeito
+ * ainda fizer sentido. Em READ COMMITTED, a releitura vê o que foi commitado.
+ */
+async function retryOnce(
+  tx: Db,
+  ticket: Ticket,
+  effect: string,
+  attempt: (current: Ticket) => Promise<boolean>,
+  stillApplies: (current: Ticket) => boolean,
+): Promise<void> {
+  if (await attempt(ticket)) return;
+  const current = await tx.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+  if (!stillApplies(current)) return;
+  // Perder duas vezes seguidas é raro e o comentário fica; o efeito, não. Sem o
+  // log, uma 1ª resposta perdida assim só apareceria como BREACHED.
+  if (!(await attempt(current))) {
+    logger.warn(
+      `Efeito de comentário descartado após nova tentativa: ${effect}, ticket ${ticket.id}`,
+    );
+  }
+}
+
+const logger = new Logger(TicketsService.name);
 
 function assigneeFilter(filter: string | undefined, user: RequestUser): string | null | undefined {
   if (filter === 'me') return user.id;
@@ -248,8 +325,13 @@ function rejection(reason: TransitionRejection): HttpException {
 
 const iso = (date: Date | null) => date?.toISOString() ?? null;
 
-function toTicketSummary(ticket: TicketWithPeople): TicketSummary {
-  return {
+/** O SLA só vai para a equipe: para o cliente, a chave nem existe. */
+function toTicketSummary(
+  ticket: TicketWithPeople,
+  user: RequestUser,
+  now = new Date(),
+): TicketSummary {
+  const summary: TicketSummary = {
     id: ticket.id,
     number: ticket.number,
     title: ticket.title,
@@ -260,11 +342,27 @@ function toTicketSummary(ticket: TicketWithPeople): TicketSummary {
     createdAt: ticket.createdAt.toISOString(),
     updatedAt: ticket.updatedAt.toISOString(),
   };
+  if (isStaff(user)) {
+    const sla = computeSla(ticket, now);
+    summary.sla = {
+      firstResponse: toSlaClock(sla.firstResponse),
+      resolution: toSlaClock(sla.resolution),
+    };
+  }
+  return summary;
 }
 
-function toTicketDetail(ticket: TicketWithPeople): TicketDetail {
+function toSlaClock(clock: SlaClockResult): SlaClock {
+  return { ...clock, dueAt: clock.dueAt.toISOString() };
+}
+
+function toTicketDetail(
+  ticket: TicketWithPeople,
+  user: RequestUser,
+  now = new Date(),
+): TicketDetail {
   return {
-    ...toTicketSummary(ticket),
+    ...toTicketSummary(ticket, user, now),
     description: ticket.description,
     firstResponseAt: iso(ticket.firstResponseAt),
     resolvedAt: iso(ticket.resolvedAt),

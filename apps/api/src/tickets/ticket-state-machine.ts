@@ -65,7 +65,7 @@ function isReopenWindowExpired({ resolvedAt, now }: TransitionContext): boolean 
   return !resolvedAt || now.getTime() - resolvedAt.getTime() > REOPEN_WINDOW_MS;
 }
 
-/** Campos gravados junto com a mudança de status. A Fase 5 acrescenta a pausa do SLA. */
+/** Campos do ciclo de vida gravados junto com a mudança de status. A pausa do SLA vem de sla/. */
 export function transitionPatch(
   from: TicketStatus,
   to: TicketStatus,
@@ -100,7 +100,11 @@ export function commentEffects(
       : { setFirstResponseAt: false };
   }
 
-  const effects: CommentEffects = { setFirstResponseAt: ticket.firstResponseAt === null };
+  // Em RESOLVED o veredito do SLA está fechado: responder ali não vira 1ª resposta
+  // (ela continua NOT_APPLICABLE ou BREACHED). Reabrindo, o relógio volta a contar.
+  const effects: CommentEffects = {
+    setFirstResponseAt: ticket.firstResponseAt === null && ticket.status !== 'RESOLVED',
+  };
   // Responder é uma forma de assumir: o agente atribuído tira o ticket de OPEN.
   if (ticket.status === 'OPEN' && ticket.assigneeId === author.id) effects.statusTo = 'IN_PROGRESS';
   return effects;

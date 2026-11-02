@@ -90,10 +90,13 @@ model Ticket {
   updatedAt   DateTime     @updatedAt
 
   // SLA — prazos materializados para filtrar/ordenar em SQL. Ao retomar de
-  // uma pausa, o tempo pausado é somado aos dois prazos e a pausedSeconds.
-  firstResponseAt    DateTime?
-  firstResponseDueAt DateTime
-  resolutionDueAt    DateTime
+  // uma pausa, o tempo pausado é somado aos prazos e a pausedSeconds. O
+  // *RiskAt é o instante em que 80% do prazo foi consumido ("em risco").
+  firstResponseAt     DateTime?
+  firstResponseDueAt  DateTime
+  firstResponseRiskAt DateTime
+  resolutionDueAt     DateTime
+  resolutionRiskAt    DateTime
   slaPausedAt        DateTime?
   pausedSeconds      Int       @default(0)
   resolvedAt         DateTime?
