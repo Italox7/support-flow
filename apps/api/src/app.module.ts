@@ -4,9 +4,10 @@ import { EnvModule } from './config/env.module.js';
 import { HealthController } from './health/health.controller.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { TicketsModule } from './tickets/tickets.module.js';
+import { UsersModule } from './users/users.module.js';
 
 @Module({
-  imports: [EnvModule, PrismaModule, AuthModule, TicketsModule],
+  imports: [EnvModule, PrismaModule, AuthModule, TicketsModule, UsersModule],
   controllers: [HealthController],
 })
 export class AppModule {}

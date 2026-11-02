@@ -7,13 +7,16 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsUUID,
   Matches,
   Max,
   MaxLength,
   Min,
+  ValidateIf,
 } from 'class-validator';
 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
+const isPresent = (_object: object, value: unknown) => value !== undefined;
 /** `?status=OPEN` chega como string e `?status=OPEN&status=CLOSED` como array. */
 const toArray = ({ value }: { value: unknown }) =>
   value === undefined || Array.isArray(value) ? value : [value];
@@ -73,10 +76,18 @@ export class CreateTicketDto {
   priority?: Priority;
 }
 
-/** Só a prioridade, por enquanto. O responsável entra na Fase 4 (admin). */
+/**
+ * Prioridade (equipe) e responsável (só admin); ao menos um, checado no
+ * serviço. `@ValidateIf` em vez de `@IsOptional`: ausente pode, `null` não.
+ */
 export class UpdateTicketDto {
+  @ValidateIf(isPresent)
   @IsIn(PRIORITIES)
-  priority!: Priority;
+  priority?: Priority;
+
+  @ValidateIf(isPresent)
+  @IsUUID()
+  assigneeId?: string;
 }
 
 export class TransitionDto {

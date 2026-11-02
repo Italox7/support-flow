@@ -1,11 +1,14 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
+  UnprocessableEntityException,
   type HttpException,
 } from '@nestjs/common';
 import type { Paginated, TicketDetail, TicketStatus, TicketSummary } from '@support-flow/shared';
+import { AssignmentService } from '../assignment/assignment.service.js';
 import type { RequestUser } from '../auth/auth.types.js';
 import { Prisma, type Ticket } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -38,7 +41,10 @@ export function ticketScope(user: RequestUser): Prisma.TicketWhereInput {
 
 @Injectable()
 export class TicketsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly assignment: AssignmentService,
+  ) {}
 
   async list(user: RequestUser, query: ListTicketsQuery): Promise<Paginated<TicketSummary>> {
     const { page, pageSize } = query;
@@ -65,23 +71,30 @@ export class TicketsService {
     return { items: tickets.map(toTicketSummary), page, pageSize, total };
   }
 
-  /** Sem responsável por enquanto: a atribuição automática é da Fase 4. */
-  async create(user: RequestUser, dto: CreateTicketDto): Promise<TicketDetail> {
+  /**
+   * O ticket nasce atribuído ao agente disponível com menor carga, ou sem
+   * responsável se não houver nenhum (vira órfão até alguém ficar disponível).
+   */
+  create(user: RequestUser, dto: CreateTicketDto): Promise<TicketDetail> {
     const priority = dto.priority ?? 'MEDIUM';
     const createdAt = new Date();
-    const policy = await this.prisma.slaPolicy.findUniqueOrThrow({ where: { priority } });
-    const ticket = await this.prisma.ticket.create({
-      data: {
-        title: dto.title,
-        description: dto.description,
-        priority,
-        requesterId: user.id,
-        createdAt,
-        ...computeDeadlines(createdAt, policy),
-      },
-      include: ticketInclude,
+    return this.assignment.inLock(async (tx) => {
+      const assigneeId = await this.assignment.assignNew(tx, createdAt);
+      const policy = await tx.slaPolicy.findUniqueOrThrow({ where: { priority } });
+      const ticket = await tx.ticket.create({
+        data: {
+          title: dto.title,
+          description: dto.description,
+          priority,
+          requesterId: user.id,
+          assigneeId,
+          createdAt,
+          ...computeDeadlines(createdAt, policy),
+        },
+        include: ticketInclude,
+      });
+      return toTicketDetail(ticket);
     });
-    return toTicketDetail(ticket);
   }
 
   async findOne(user: RequestUser, id: string): Promise<TicketDetail> {
@@ -101,25 +114,47 @@ export class TicketsService {
     return ticket;
   }
 
-  /** Trocar a prioridade recalcula os prazos a partir da abertura. */
-  updatePriority(user: RequestUser, id: string, dto: UpdateTicketDto): Promise<TicketDetail> {
-    return this.prisma.$transaction(async (tx) => {
+  /**
+   * Trocar a prioridade recalcula os prazos a partir da abertura; trocar o
+   * responsável é só do admin e não mexe no status. Os dois campos valem juntos
+   * ou nada vale. Erros: 400 → 404 → 403 → 409 → 422.
+   */
+  update(user: RequestUser, id: string, dto: UpdateTicketDto): Promise<TicketDetail> {
+    if (dto.priority === undefined && dto.assigneeId === undefined) {
+      throw new BadRequestException('Informe priority ou assigneeId.');
+    }
+    // A troca de responsável muda a carga; a rota inteira roda sob o lock da atribuição.
+    return this.assignment.inLock(async (tx) => {
       const ticket = await this.findScoped(tx, user, id);
-      if (!isStaff(user)) {
-        throw new ForbiddenException('Só a equipe de suporte altera a prioridade.');
+      if (!isStaff(user)) throw new ForbiddenException('Só a equipe de suporte altera o ticket.');
+      if (dto.assigneeId !== undefined && user.role !== 'ADMIN') {
+        throw new ForbiddenException('Só o admin troca o responsável.');
       }
       if (ticket.status === 'CLOSED') throw new ConflictException('Ticket fechado.');
 
-      const policy = await tx.slaPolicy.findUniqueOrThrow({ where: { priority: dto.priority } });
-      const updated = await tx.ticket.update({
-        where: { id },
-        data: {
-          priority: dto.priority,
-          ...computeDeadlines(ticket.createdAt, policy, ticket.pausedSeconds),
-        },
-        include: ticketInclude,
+      const data: Prisma.TicketUncheckedUpdateManyInput = {};
+      if (dto.priority !== undefined) {
+        const policy = await tx.slaPolicy.findUniqueOrThrow({ where: { priority: dto.priority } });
+        data.priority = dto.priority;
+        Object.assign(data, computeDeadlines(ticket.createdAt, policy, ticket.pausedSeconds));
+      }
+      if (dto.assigneeId !== undefined) {
+        // Pode ser um agente indisponível: é uma escolha explícita do admin.
+        if (!(await this.assignment.isAgent(tx, dto.assigneeId))) {
+          throw new UnprocessableEntityException('O responsável precisa ser um agente.');
+        }
+        data.assigneeId = dto.assigneeId;
+      }
+
+      // O fechamento (job) não pega o lock: o update só vale se o ticket seguir aberto.
+      const { count } = await tx.ticket.updateMany({
+        where: { id, status: { not: 'CLOSED' } },
+        data,
       });
-      return toTicketDetail(updated);
+      if (count === 0) throw new ConflictException('Ticket fechado.');
+      return toTicketDetail(
+        await tx.ticket.findUniqueOrThrow({ where: { id }, include: ticketInclude }),
+      );
     });
   }
 

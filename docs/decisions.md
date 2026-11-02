@@ -2,6 +2,37 @@
 
 Registro curto das decisões que não são óbvias pelo código. A mais recente fica no topo.
 
+## 2026-11-01 — Atribuição (Fase 4)
+
+Desenho revisado pelo Archie antes do código.
+
+- **Um lock global de atribuição** (`pg_advisory_xact_lock`, chave fixa no
+  `AssignmentService`). É sempre a primeira instrução da transação, que só o `inLock` abre,
+  com `maxWait`/`timeout` explícitos. Os métodos que escolhem agente exigem um `LockedTx`:
+  passar uma transação sem o lock não compila. Lock de transação funciona no pooler do
+  Supabase em modo transação; um lock de sessão não funcionaria. Lock por linha
+  (`FOR UPDATE` nos agentes) arriscaria deadlock sem ganho nesta escala.
+- **Pegam o lock**: criação de ticket, mudança de disponibilidade e `PATCH /tickets/:id`.
+  Transições não pegam: um ticket resolvido ou reaberto ao mesmo tempo deixa a carga lida
+  defasada em 1 (escolha um pouco pior), nunca dois tickets vendo a mesma carga.
+- **"Em aberto" tem uma definição só**: `OPEN_STATUSES` em `packages/shared` (OPEN,
+  IN_PROGRESS, WAITING_CUSTOMER). WAITING_CUSTOMER conta como carga.
+- **Ficar indisponível não redistribui**: o agente mantém os tickets e só sai da fila.
+  Ficar disponível distribui os órfãos abertos na mesma transação, os de prazo mais curto
+  primeiro, até 100 por vez; o resto espera o job diário (Fase 7). Se só um agente voltar,
+  ele recebe o lote inteiro: é o que a regra de menor carga manda.
+- **Reatribuir é só do admin**, pelo mesmo `PATCH /tickets/:id` da prioridade. Se o agente
+  mandar `assigneeId`, a requisição inteira recebe 403, nada é aplicado em parte. O admin
+  pode escolher um agente indisponível. A reatribuição não muda o status nem o
+  `lastAssignedAt` (cursor da fila automática). `null` não é aceito: desatribuir criaria um
+  órfão que a varredura reatribuiria.
+- **Primeiro 422 da API**: `assigneeId` válido no formato, mas que não é de um agente. O
+  400 continua sendo do formato (ValidationPipe). Ordem: 400 → 404 → 403 → 409 → 422.
+- **Fronteira**: `assignment/` não importa `tickets/` nem `users/` (regra
+  `no-restricted-imports` no ESLint).
+- **Fora desta fase**: criar agente (`POST /users/agents`, antes da Fase 6, com o Gard) e
+  `POST /jobs/run` (Fase 7). Até lá, agentes vêm do seed ou do banco.
+
 ## 2026-11-01 — Tickets e comentários (Fase 3)
 
 Contrato e schema revisados pelo Archie antes do código.
@@ -26,7 +57,7 @@ total}`). Cursor não compensa nesta escala e complica a numeração de páginas
   calculados na criação e toda prioridade precisa de política em qualquer ambiente. Os E2E
   não apagam `sla_policies`.
 - **Sem auto-atribuição nesta fase**: sem responsável, só o admin tira um ticket de OPEN. A
-  atribuição é da Fase 4.
+  atribuição veio na Fase 4.
 - **Rate limit global** (120/min por rota e por IP), antes da autenticação; `/auth` mantém
   30/min e 5/min nas rotas que verificam senha. Vale também para `/api/health`: com
   `TRUST_PROXY` errado, todos dividem o IP do proxy e o health check do Render pode levar 429.

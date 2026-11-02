@@ -1,0 +1,309 @@
+import type { NestExpressApplication } from '@nestjs/platform-express';
+import type { AgentSummary, TicketDetail } from '@support-flow/shared';
+import request from 'supertest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { Prisma } from '../src/generated/prisma/client.js';
+import { PrismaService } from '../src/prisma/prisma.service.js';
+import {
+  createActor,
+  createApp,
+  resetDatabase,
+  TEST_DATABASE_URL,
+  type Actor,
+} from './e2e-setup.js';
+
+const MISSING = '00000000-0000-4000-8000-000000000000';
+
+describe.skipIf(!TEST_DATABASE_URL)('atribuição (e2e)', () => {
+  let app: NestExpressApplication;
+  let prisma: PrismaService;
+  let customer: Actor;
+  let otherCustomer: Actor;
+  let admin: Actor;
+
+  const http = () => request(app.getHttpServer());
+  const as = (actor: Actor) => ({
+    get: (url: string) => http().get(url).set('Authorization', `Bearer ${actor.token}`),
+    post: (url: string) => http().post(url).set('Authorization', `Bearer ${actor.token}`),
+    patch: (url: string) => http().patch(url).set('Authorization', `Bearer ${actor.token}`),
+  });
+
+  const agentNamed = (name: string, isAvailable = true) =>
+    createActor(app, 'AGENT', name, { isAvailable });
+
+  async function openTicket(by: Actor = customer): Promise<TicketDetail> {
+    const res = await as(by)
+      .post('/api/tickets')
+      .send({ title: 'Não consigo entrar', description: 'Dá erro 500 no login.' })
+      .expect(201);
+    return res.body;
+  }
+
+  async function setTicket(id: string, data: Prisma.TicketUpdateInput): Promise<void> {
+    await prisma.ticket.update({ where: { id }, data });
+  }
+
+  const assigneeOf = async (id: string) =>
+    (await prisma.ticket.findUniqueOrThrow({ where: { id } })).assigneeId;
+
+  /** Tickets abertos por responsável, como a atribuição os conta. */
+  async function loads(): Promise<Record<string, number>> {
+    const res = await as(admin).get('/api/users/agents').expect(200);
+    return Object.fromEntries(
+      (res.body as AgentSummary[]).map((agent) => [agent.name, agent.openTickets]),
+    );
+  }
+
+  beforeAll(async () => {
+    app = await createApp({ throttle: false });
+    prisma = app.get(PrismaService);
+  });
+
+  afterAll(async () => {
+    await app?.close();
+  });
+
+  beforeEach(async () => {
+    await resetDatabase(prisma);
+    customer = await createActor(app, 'CUSTOMER', 'cliente');
+    otherCustomer = await createActor(app, 'CUSTOMER', 'outro-cliente');
+    admin = await createActor(app, 'ADMIN', 'admin');
+  });
+
+  describe('na abertura do ticket', () => {
+    it('vai para o agente disponível; indisponível, cliente e admin não recebem', async () => {
+      const available = await agentNamed('disponivel');
+      await agentNamed('ausente', false);
+
+      const ticket = await openTicket();
+      expect(ticket.assignee).toEqual({ id: available.id, name: 'disponivel' });
+    });
+
+    it('vai para quem tem menos tickets abertos; resolvidos e fechados não contam', async () => {
+      const busy = await agentNamed('a-ocupado');
+      const light = await agentNamed('b-leve');
+      for (const status of ['IN_PROGRESS', 'WAITING_CUSTOMER'] as const) {
+        const { id } = await openTicket();
+        await setTicket(id, { status, assignee: { connect: { id: busy.id } } });
+      }
+      for (const status of ['RESOLVED', 'CLOSED'] as const) {
+        const { id } = await openTicket();
+        await setTicket(id, { status, assignee: { connect: { id: light.id } } });
+      }
+      // 2 abertos contra 0 abertos (e 2 encerrados).
+      expect((await openTicket()).assignee?.id).toBe(light.id);
+    });
+
+    it('no empate de carga, alterna pelo lastAssignedAt mais antigo', async () => {
+      const first = await agentNamed('a-primeiro');
+      const second = await agentNamed('b-segundo');
+
+      const assignees = [];
+      for (let i = 0; i < 4; i++) assignees.push((await openTicket()).assignee?.id);
+      // Nunca receberam: decide o id. Depois, a carga e o lastAssignedAt alternam.
+      const [firstPick, secondPick] = [first.id, second.id].sort();
+      expect(assignees).toEqual([firstPick, secondPick, firstPick, secondPick]);
+    });
+
+    it('tickets simultâneos não veem a mesma carga: a divisão fica equilibrada', async () => {
+      await agentNamed('a');
+      await agentNamed('b');
+
+      await Promise.all(Array.from({ length: 8 }, () => openTicket()));
+      expect(await loads()).toEqual({ a: 4, b: 4 });
+    });
+
+    it('sem agente disponível, o ticket fica sem responsável', async () => {
+      await agentNamed('ausente', false);
+      expect((await openTicket()).assignee).toBeNull();
+    });
+
+    it('o agente atribuído tira o ticket de OPEN', async () => {
+      const agent = await agentNamed('agente');
+      const ticket = await openTicket();
+      const res = await as(agent)
+        .post(`/api/tickets/${ticket.id}/transitions`)
+        .send({ to: 'IN_PROGRESS' })
+        .expect(200);
+      expect(res.body.status).toBe('IN_PROGRESS');
+    });
+  });
+
+  describe('disponibilidade', () => {
+    it('ficar disponível distribui os órfãos abertos, e só eles', async () => {
+      const agent = await agentNamed('agente', false);
+      const orphans = [await openTicket(), await openTicket()];
+      const resolved = await openTicket();
+      await setTicket(resolved.id, { status: 'RESOLVED', resolvedAt: new Date() });
+
+      const res = await as(agent)
+        .patch('/api/users/me/availability')
+        .send({ isAvailable: true })
+        .expect(200);
+      expect(res.body).toEqual({ isAvailable: true });
+
+      for (const { id } of orphans) expect(await assigneeOf(id)).toBe(agent.id);
+      expect(await assigneeOf(resolved.id)).toBeNull();
+    });
+
+    it('os órfãos se dividem pela carga entre os agentes disponíveis', async () => {
+      const first = await agentNamed('a', false);
+      const second = await agentNamed('b', false);
+      for (let i = 0; i < 4; i++) await openTicket();
+      // O primeiro volta direto pelo banco, sem varredura: os 4 seguem órfãos.
+      await prisma.user.update({ where: { id: first.id }, data: { isAvailable: true } });
+
+      await as(second).patch('/api/users/me/availability').send({ isAvailable: true }).expect(200);
+      expect(await loads()).toEqual({ a: 2, b: 2 });
+    });
+
+    it('ficar indisponível mantém os tickets e tira o agente da fila', async () => {
+      const agent = await agentNamed('agente');
+      const ticket = await openTicket();
+
+      await as(agent).patch('/api/users/me/availability').send({ isAvailable: false }).expect(200);
+      const me = await as(agent).get('/api/users/me/availability').expect(200);
+      expect(me.body).toEqual({ isAvailable: false });
+
+      expect(await assigneeOf(ticket.id)).toBe(agent.id);
+      expect((await openTicket()).assignee).toBeNull();
+    });
+
+    it('o admin muda a disponibilidade de qualquer agente, e só de agentes', async () => {
+      const agent = await agentNamed('agente', false);
+      await openTicket();
+
+      await as(admin)
+        .patch(`/api/users/${agent.id}/availability`)
+        .send({ isAvailable: true })
+        .expect(200);
+      expect(await loads()).toEqual({ agente: 1 });
+
+      for (const target of [customer.id, admin.id, MISSING]) {
+        await as(admin)
+          .patch(`/api/users/${target}/availability`)
+          .send({ isAvailable: true })
+          .expect(404);
+      }
+    });
+
+    it('o agente não muda a disponibilidade de outro; cliente e admin não têm "me"', async () => {
+      const agent = await agentNamed('agente');
+      const other = await agentNamed('outro', false);
+
+      await as(agent)
+        .patch(`/api/users/${other.id}/availability`)
+        .send({ isAvailable: true })
+        .expect(403);
+      for (const actor of [customer, admin]) {
+        await as(actor).get('/api/users/me/availability').expect(403);
+        await as(actor).patch('/api/users/me/availability').send({ isAvailable: true }).expect(403);
+      }
+      const stored = await prisma.user.findUniqueOrThrow({ where: { id: other.id } });
+      expect(stored.isAvailable).toBe(false);
+    });
+
+    it.each([
+      ['corpo vazio', {}],
+      ['isAvailable que não é booleano', { isAvailable: 'sim' }],
+      ['campo a mais', { isAvailable: true, role: 'ADMIN' }],
+    ])('retorna 400 com %s', async (_case, body) => {
+      const agent = await agentNamed('agente');
+      await as(agent).patch('/api/users/me/availability').send(body).expect(400);
+    });
+  });
+
+  describe('GET /api/users/agents', () => {
+    it('lista os agentes com disponibilidade e carga, só para o admin', async () => {
+      const agent = await agentNamed('agente');
+      await agentNamed('ausente', false);
+      await openTicket();
+
+      const res = await as(admin).get('/api/users/agents').expect(200);
+      expect(res.body).toEqual([
+        {
+          id: agent.id,
+          name: 'agente',
+          email: 'agente@example.com',
+          isAvailable: true,
+          openTickets: 1,
+        },
+        expect.objectContaining({ name: 'ausente', isAvailable: false, openTickets: 0 }),
+      ]);
+      expect(JSON.stringify(res.body)).not.toContain('passwordHash');
+
+      await as(agent).get('/api/users/agents').expect(403);
+      await as(customer).get('/api/users/agents').expect(403);
+    });
+  });
+
+  describe('reatribuição (PATCH /api/tickets/:id)', () => {
+    let agent: Actor;
+    let other: Actor;
+    let ticket: TicketDetail;
+
+    beforeEach(async () => {
+      agent = await agentNamed('agente');
+      other = await agentNamed('outro', false);
+      ticket = await openTicket();
+      await setTicket(ticket.id, { status: 'IN_PROGRESS' });
+    });
+
+    const reassign = (by: Actor, body: object, id = ticket.id) =>
+      as(by).patch(`/api/tickets/${id}`).send(body);
+
+    it('o admin troca o responsável, inclusive para um agente indisponível', async () => {
+      const before = await prisma.user.findUniqueOrThrow({ where: { id: other.id } });
+
+      const res = await reassign(admin, { assigneeId: other.id }).expect(200);
+      expect(res.body).toMatchObject({
+        assignee: { id: other.id, name: 'outro' },
+        status: 'IN_PROGRESS',
+      });
+      // Atribuição manual não mexe no cursor da fila automática.
+      const after = await prisma.user.findUniqueOrThrow({ where: { id: other.id } });
+      expect(after.lastAssignedAt).toEqual(before.lastAssignedAt);
+    });
+
+    it('o admin troca prioridade e responsável de uma vez', async () => {
+      const res = await reassign(admin, { priority: 'URGENT', assigneeId: other.id }).expect(200);
+      expect(res.body).toMatchObject({ priority: 'URGENT', assignee: { id: other.id } });
+    });
+
+    it('o agente que manda assigneeId recebe 403 e nada é aplicado', async () => {
+      await reassign(agent, { priority: 'URGENT', assigneeId: other.id }).expect(403);
+      const stored = await prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+      expect(stored).toMatchObject({ priority: 'MEDIUM', assigneeId: agent.id });
+    });
+
+    it('o cliente recebe 403 no próprio ticket e 404 no de outro', async () => {
+      await reassign(customer, { assigneeId: other.id }).expect(403);
+      const foreign = await openTicket(otherCustomer);
+      await reassign(customer, { assigneeId: other.id }, foreign.id).expect(404);
+    });
+
+    it.each([
+      ['um cliente', () => customer.id],
+      ['um admin', () => admin.id],
+      ['um id inexistente', () => MISSING],
+    ])('responsável que é %s é 422', async (_case, target) => {
+      await reassign(admin, { assigneeId: target() }).expect(422);
+      expect(await assigneeOf(ticket.id)).toBe(agent.id);
+    });
+
+    it.each([
+      ['corpo vazio', {}],
+      ['assigneeId nulo', { assigneeId: null }],
+      ['prioridade nula', { priority: null }],
+      ['assigneeId que não é UUID', { assigneeId: 'fulano' }],
+    ])('retorna 400 com %s', async (_case, body) => {
+      await reassign(admin, body).expect(400);
+    });
+
+    it('ordem dos erros: 403 antes de 409, e 409 antes de 422', async () => {
+      await setTicket(ticket.id, { status: 'CLOSED' });
+      await reassign(agent, { assigneeId: other.id }).expect(403);
+      await reassign(admin, { assigneeId: customer.id }).expect(409);
+    });
+  });
+});

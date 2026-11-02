@@ -1,10 +1,14 @@
+import { JwtService } from '@nestjs/jwt';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { ThrottlerGuard } from '@nestjs/throttler';
+import type { Role } from '@support-flow/shared';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
+import type { AccessTokenPayload } from '../src/auth/auth.types.js';
 import { ENV, loadEnv } from '../src/config/env.js';
-import type { PrismaService } from '../src/prisma/prisma.service.js';
+import type { Prisma } from '../src/generated/prisma/client.js';
+import { PrismaService } from '../src/prisma/prisma.service.js';
 
 // Base comum dos testes E2E.
 
@@ -50,6 +54,25 @@ export async function createApp(options: { throttle: boolean }): Promise<NestExp
   configureApp(app, env);
   await app.init();
   return app;
+}
+
+export interface Actor {
+  id: string;
+  token: string;
+}
+
+/** Usuário criado direto no banco, com o token assinado como o login faria. */
+export async function createActor(
+  app: NestExpressApplication,
+  role: Role,
+  name: string,
+  data: Partial<Prisma.UserCreateInput> = {},
+): Promise<Actor> {
+  const user = await app.get(PrismaService).user.create({
+    data: { email: `${name}@example.com`, name, role, passwordHash: 'sem-login', ...data },
+  });
+  const payload: AccessTokenPayload = { sub: user.id, role };
+  return { id: user.id, token: await app.get(JwtService).signAsync(payload) };
 }
 
 /** Apaga os dados dos testes. As políticas de SLA vêm da migration e ficam. */
