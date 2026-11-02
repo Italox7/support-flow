@@ -7,9 +7,8 @@ import {
   Req,
   Res,
   UnauthorizedException,
-  UseGuards,
 } from '@nestjs/common';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 import type { AuthResponse, AuthUser } from '@support-flow/shared';
 import type { Request, Response } from 'express';
 import { CurrentUser, Public } from './auth.decorators.js';
@@ -18,11 +17,13 @@ import { AuthService, type Session } from './auth.service.js';
 import type { RequestUser } from './auth.types.js';
 import { clearRefreshCookie, readRefreshCookie, setRefreshCookie } from './refresh-token.js';
 
+/** /auth fica abaixo do limite global (ThrottlerGuard global, em AuthModule). */
+const AUTH_THROTTLE = { default: { limit: 30, ttl: 60_000 } };
 /** Limite mais apertado para as rotas que verificam senha (força bruta). */
 const CREDENTIALS_THROTTLE = { default: { limit: 5, ttl: 60_000 } };
 
 @Controller('auth')
-@UseGuards(ThrottlerGuard)
+@Throttle(AUTH_THROTTLE)
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
