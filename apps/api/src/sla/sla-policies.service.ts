@@ -1,5 +1,6 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import type { Priority, SlaPolicyDto } from '@support-flow/shared';
+import type { RequestUser } from '../auth/auth.types.js';
 import type { SlaPolicy } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { UpdateSlaPolicyDto } from './sla-policies.dto.js';
@@ -12,6 +13,8 @@ const PRIORITY_ORDER: Priority[] = ['URGENT', 'HIGH', 'MEDIUM', 'LOW'];
  */
 @Injectable()
 export class SlaPoliciesService {
+  private readonly logger = new Logger(SlaPoliciesService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async list(): Promise<SlaPolicyDto[]> {
@@ -21,15 +24,36 @@ export class SlaPoliciesService {
       .map(toSlaPolicyDto);
   }
 
-  async update(priority: Priority, dto: UpdateSlaPolicyDto): Promise<SlaPolicyDto> {
+  async update(
+    user: RequestUser,
+    priority: Priority,
+    dto: UpdateSlaPolicyDto,
+  ): Promise<SlaPolicyDto> {
     if (dto.firstResponseMinutes >= dto.resolutionMinutes) {
       throw new BadRequestException('A 1ª resposta precisa ter prazo menor que a resolução.');
     }
     // Upsert: toda prioridade precisa de política para os prazos serem calculados.
-    const policy = await this.prisma.slaPolicy.upsert({
-      where: { priority },
-      update: dto,
-      create: { priority, ...dto },
+    const [before, policy] = await this.prisma.$transaction([
+      this.prisma.slaPolicy.findUnique({ where: { priority } }),
+      this.prisma.slaPolicy.upsert({
+        where: { priority },
+        update: dto,
+        create: { priority, ...dto },
+      }),
+    ]);
+    // Sem histórico de política nesta fase: o log é o registro de quem mudou o quê.
+    this.logger.log({
+      event: 'sla_policy_updated',
+      adminId: user.id,
+      priority,
+      before: before && {
+        firstResponseMinutes: before.firstResponseMinutes,
+        resolutionMinutes: before.resolutionMinutes,
+      },
+      after: {
+        firstResponseMinutes: policy.firstResponseMinutes,
+        resolutionMinutes: policy.resolutionMinutes,
+      },
     });
     return toSlaPolicyDto(policy);
   }

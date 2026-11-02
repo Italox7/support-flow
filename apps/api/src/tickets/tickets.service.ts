@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   UnprocessableEntityException,
   type HttpException,
@@ -251,6 +252,7 @@ export class TicketsService {
       await retryOnce(
         tx,
         ticket,
+        'firstResponse',
         async (current) => {
           const { data, guard } = firstResponsePatch(current, now);
           const { count } = await tx.ticket.updateMany({
@@ -268,6 +270,7 @@ export class TicketsService {
       await retryOnce(
         tx,
         ticket,
+        `status → ${statusTo}`,
         (current) => this.applyTransition(tx, current, statusTo, now),
         (current) => current.status === ticket.status,
       );
@@ -283,13 +286,23 @@ export class TicketsService {
 async function retryOnce(
   tx: Db,
   ticket: Ticket,
+  effect: string,
   attempt: (current: Ticket) => Promise<boolean>,
   stillApplies: (current: Ticket) => boolean,
 ): Promise<void> {
   if (await attempt(ticket)) return;
   const current = await tx.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
-  if (stillApplies(current)) await attempt(current);
+  if (!stillApplies(current)) return;
+  // Perder duas vezes seguidas é raro e o comentário fica; o efeito, não. Sem o
+  // log, uma 1ª resposta perdida assim só apareceria como BREACHED.
+  if (!(await attempt(current))) {
+    logger.warn(
+      `Efeito de comentário descartado após nova tentativa: ${effect}, ticket ${ticket.id}`,
+    );
+  }
 }
+
+const logger = new Logger(TicketsService.name);
 
 function assigneeFilter(filter: string | undefined, user: RequestUser): string | null | undefined {
   if (filter === 'me') return user.id;

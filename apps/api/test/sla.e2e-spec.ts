@@ -7,7 +7,7 @@ import type {
   TicketSummary,
 } from '@support-flow/shared';
 import request from 'supertest';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ASSIGNMENT_LOCK_KEY } from '../src/assignment/assignment.service.js';
 import type { Prisma, Ticket } from '../src/generated/prisma/client.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
@@ -95,19 +95,50 @@ describe.skipIf(!TEST_DATABASE_URL)('SLA (e2e)', () => {
 
   /**
    * Segura a linha do ticket numa transação do teste: uma escrita da API nela
-   * espera, mas a leitura passa. `during` roda com a linha presa.
+   * espera, mas a leitura passa. NO KEY UPDATE deixa passar o INSERT de um
+   * comentário (a FK só pede KEY SHARE) e prende o UPDATE do ticket que vem
+   * depois. `during` recebe o pid da transação que segura a linha.
    */
   async function withRowHeld(
     id: string,
-    during: (tx: Prisma.TransactionClient) => Promise<void>,
+    mode: 'UPDATE' | 'NO KEY UPDATE',
+    during: (tx: Prisma.TransactionClient, holderPid: number) => Promise<void>,
   ): Promise<void> {
     await prisma.$transaction(
       async (tx) => {
-        await tx.$queryRaw`SELECT "id" FROM "tickets" WHERE "id" = ${id}::uuid FOR UPDATE`;
-        await during(tx);
+        if (mode === 'UPDATE') {
+          await tx.$queryRaw`SELECT "id" FROM "tickets" WHERE "id" = ${id}::uuid FOR UPDATE`;
+        } else {
+          await tx.$queryRaw`SELECT "id" FROM "tickets" WHERE "id" = ${id}::uuid FOR NO KEY UPDATE`;
+        }
+        const [{ pid }] = await tx.$queryRaw<[{ pid: number }]>`SELECT pg_backend_pid() AS pid`;
+        await during(tx, pid);
       },
       { timeout: 10_000 },
     );
+  }
+
+  /**
+   * Dispara as requisições contra a linha presa, espera todas pararem nela, roda
+   * `middle` com a linha ainda presa e solta. Devolve as respostas na ordem.
+   */
+  async function raceOnRow(
+    id: string,
+    mode: 'UPDATE' | 'NO KEY UPDATE',
+    requests: (() => request.Test)[],
+    middle: (tx: Prisma.TransactionClient) => Promise<void> = async () => undefined,
+  ): Promise<request.Response[]> {
+    let pending: Promise<request.Response>[] = [];
+    try {
+      await withRowHeld(id, mode, async (tx, holderPid) => {
+        pending = requests.map((send) => start(send()));
+        await waitForBlockedBy(holderPid, requests.length);
+        await middle(tx);
+      });
+      return await Promise.all(pending);
+    } finally {
+      await Promise.allSettled(pending);
+    }
   }
 
   async function withAssignmentLockHeld(during: () => Promise<void>): Promise<void> {
@@ -120,28 +151,40 @@ describe.skipIf(!TEST_DATABASE_URL)('SLA (e2e)', () => {
     );
   }
 
-  async function waitFor(what: string, sql: () => Promise<[{ waiting: number }]>): Promise<void> {
+  async function waitFor(
+    what: string,
+    count: number,
+    sql: () => Promise<[{ waiting: number }]>,
+  ): Promise<void> {
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
       const [{ waiting }] = await sql();
-      if (waiting > 0) return;
+      if (waiting >= count) return;
       await sleep(20);
     }
-    throw new Error(`Nenhuma requisição ficou esperando ${what}.`);
+    throw new Error(`Menos de ${count} requisição(ões) ficaram esperando ${what}.`);
   }
 
-  const waitForRowLockWaiter = () =>
+  /**
+   * Conexões presas pela transação do teste: direto, ou atrás de outra que já
+   * espera por ela (a segunda escrita na mesma linha espera a primeira).
+   */
+  const waitForBlockedBy = (holderPid: number, count: number) =>
     waitFor(
       'a linha do ticket',
+      count,
       () =>
         prisma.$queryRaw<[{ waiting: number }]>`
-        SELECT count(*)::int AS waiting FROM pg_locks
-        WHERE locktype IN ('transactionid', 'tuple') AND NOT granted`,
+        WITH blocked AS (SELECT pid, pg_blocking_pids(pid) AS by FROM pg_stat_activity)
+        SELECT count(*)::int AS waiting FROM blocked b
+        WHERE ${holderPid}::int = ANY(b.by)
+           OR EXISTS (SELECT 1 FROM blocked o WHERE o.pid = ANY(b.by) AND ${holderPid}::int = ANY(o.by))`,
     );
 
   const waitForAssignmentLockWaiter = () =>
     waitFor(
       'o lock da atribuição',
+      1,
       () =>
         prisma.$queryRaw<[{ waiting: number }]>`
         SELECT count(*)::int AS waiting FROM pg_locks
@@ -198,9 +241,21 @@ describe.skipIf(!TEST_DATABASE_URL)('SLA (e2e)', () => {
       expect(agentList.body.items[0].sla.resolution.state).toBe('OK');
     });
 
-    it('o cliente não filtra por SLA (403); valor inválido é 400', async () => {
+    it('o cliente não filtra por SLA (403); valor inválido ou repetido é 400', async () => {
       await as(customer).get('/api/tickets?sla=AT_RISK').expect(403);
       await as(agent).get('/api/tickets?sla=LATE').expect(400);
+      await as(agent).get('/api/tickets?sla=BREACHED&sla=BREACHED').expect(400);
+      await as(agent).get('/api/tickets?sla=AT_RISK&sla=BREACHED&sla=AT_RISK').expect(400);
+    });
+
+    it('a resposta da reabertura pelo cliente também não traz a chave sla', async () => {
+      const ticket = await openTicket();
+      await setTicket(ticket.id, { status: 'RESOLVED', resolvedAt: new Date() });
+      const res = await as(customer)
+        .post(`/api/tickets/${ticket.id}/transitions`)
+        .send({ to: 'IN_PROGRESS' })
+        .expect(200);
+      expect(res.body).not.toHaveProperty('sla');
     });
   });
 
@@ -264,7 +319,93 @@ describe.skipIf(!TEST_DATABASE_URL)('SLA (e2e)', () => {
       const res = await as(agent).get(`/api/tickets/${ticket.id}`).expect(200);
       expect(res.body.sla.firstResponse.state).toBe('NOT_APPLICABLE');
       expect(res.body.sla.resolution.state).toBe('MET');
+
+      // Responder depois de resolvido não muda o veredito.
+      await as(agent)
+        .post(`/api/tickets/${ticket.id}/comments`)
+        .send({ body: 'Que bom que resolveu!' })
+        .expect(201);
+      expect((await stored(ticket.id)).firstResponseAt).toBeNull();
+      const after = await as(agent).get(`/api/tickets/${ticket.id}`).expect(200);
+      expect(after.body.sla.firstResponse.state).toBe('NOT_APPLICABLE');
     });
+
+    it('o banco recusa relógio correndo com pausa e relógio parado sem pausa', async () => {
+      const { id } = await openTicket();
+      const violation = /tickets_sla_paused_check|check constraint/i;
+      await expect(
+        prisma.ticket.update({ where: { id }, data: { slaPausedAt: new Date() } }),
+      ).rejects.toThrow(violation);
+      await expect(
+        prisma.ticket.update({ where: { id }, data: { status: 'WAITING_CUSTOMER' } }),
+      ).rejects.toThrow(violation);
+      await expect(
+        prisma.ticket.update({ where: { id }, data: { status: 'CLOSED' } }),
+      ).rejects.toThrow(violation);
+    });
+  });
+
+  // Comentários (sem o lock da atribuição) contra outras escritas no ticket. A
+  // linha fica presa em NO KEY UPDATE: o comentário é inserido e o efeito dele
+  // no ticket é que espera.
+  describe('corrida de comentários × relógio', () => {
+    it(
+      '1ª resposta com o ticket pausando no meio: relê e mede onde o relógio parou',
+      { timeout: 15_000 },
+      async () => {
+        const ticket = await openTicket({ priority: 'URGENT' });
+        const before = await setTicket(ticket.id, { status: 'IN_PROGRESS' });
+
+        const [res] = await raceOnRow(
+          ticket.id,
+          'NO KEY UPDATE',
+          [() => as(agent).post(`/api/tickets/${ticket.id}/comments`).send({ body: 'Olhando.' })],
+          async (tx) => {
+            const current = await tx.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+            expect(await tickets.applyTransition(tx, current, 'WAITING_CUSTOMER', new Date())).toBe(
+              true,
+            );
+          },
+        );
+
+        expect(res!.status).toBe(201);
+        const after = await stored(ticket.id);
+        expect(after.status).toBe('WAITING_CUSTOMER');
+        expect(after.firstResponseAt).not.toBeNull();
+        // Empurrado exatamente pelo tempo entre a pausa e a resposta.
+        expect(after.firstResponseDueAt.getTime() - before.firstResponseDueAt.getTime()).toBe(
+          after.firstResponseAt!.getTime() - after.slaPausedAt!.getTime(),
+        );
+        const sla = (await as(agent).get(`/api/tickets/${ticket.id}`).expect(200)).body.sla;
+        expect(sla.firstResponse.state).toBe('MET');
+        expect(sla.firstResponse.remainingSeconds).toBe(
+          Math.floor((before.firstResponseDueAt.getTime() - after.slaPausedAt!.getTime()) / 1000),
+        );
+      },
+    );
+
+    it(
+      'equipe e cliente retomando ao mesmo tempo: a pausa entra uma vez só',
+      { timeout: 15_000 },
+      async () => {
+        const ticket = await waitingForAnHour();
+
+        const [transition, comment] = await raceOnRow(ticket.id, 'NO KEY UPDATE', [
+          () => as(agent).post(`/api/tickets/${ticket.id}/transitions`).send({ to: 'IN_PROGRESS' }),
+          () => as(customer).post(`/api/tickets/${ticket.id}/comments`).send({ body: 'Voltei.' }),
+        ]);
+
+        // Quem chega depois perde: a transição leva 409, o comentário fica sem efeito.
+        expect([200, 409]).toContain(transition!.status);
+        expect(comment!.status).toBe(201);
+        const after = await stored(ticket.id);
+        expect(after.status).toBe('IN_PROGRESS');
+        expect(after.pausedSeconds).toBeGreaterThanOrEqual(3600);
+        expect(after.pausedSeconds).toBeLessThan(3630);
+        await expectDeadlinesOf(after, 'MEDIUM');
+        expect(await prisma.comment.count({ where: { ticketId: ticket.id } })).toBe(1);
+      },
+    );
   });
 
   describe('troca de prioridade', () => {
@@ -301,17 +442,13 @@ describe.skipIf(!TEST_DATABASE_URL)('SLA (e2e)', () => {
       id: string,
       middle: (tx: Prisma.TransactionClient) => Promise<void>,
     ): Promise<number> {
-      let pending: Promise<request.Response> | undefined;
-      try {
-        await withRowHeld(id, async (tx) => {
-          pending = start(as(agent).patch(`/api/tickets/${id}`).send({ priority: 'URGENT' }));
-          await waitForRowLockWaiter();
-          await middle(tx);
-        });
-        return (await pending!).status;
-      } finally {
-        await pending?.catch(() => undefined);
-      }
+      const [res] = await raceOnRow(
+        id,
+        'UPDATE',
+        [() => as(agent).patch(`/api/tickets/${id}`).send({ priority: 'URGENT' })],
+        middle,
+      );
+      return res!.status;
     }
 
     const reread = (tx: Prisma.TransactionClient, id: string) =>
@@ -472,6 +609,45 @@ describe.skipIf(!TEST_DATABASE_URL)('SLA (e2e)', () => {
       };
     }
 
+    const states = (t: TicketSummary): SlaState[] => [
+      t.sla!.firstResponse.state,
+      t.sla!.resolution.state,
+    ];
+
+    /**
+     * Lista tudo (o computeSla de cada ticket vem na resposta) e exige que cada
+     * filtro devolva exatamente os tickets com um relógio no estado, e que nenhum
+     * filtro venha vazio: os dois lados degradando juntos não passam.
+     */
+    async function expectFiltersToMatchComputed(expectedTotal: number): Promise<TicketSummary[]> {
+      const list = async (query: string) => {
+        const res = await as(agent).get(`/api/tickets?pageSize=100${query}`).expect(200);
+        return res.body as { items: TicketSummary[]; total: number };
+      };
+      const all = await list('');
+      expect(all.total).toBe(expectedTotal);
+      expect(all.items).toHaveLength(expectedTotal);
+
+      const titlesWhere = (wanted: SlaState[]) =>
+        all.items
+          .filter((t) => states(t).some((s) => wanted.includes(s)))
+          .map((t) => t.title)
+          .sort();
+      const filters: [string, SlaState[]][] = [
+        ['&sla=AT_RISK', ['AT_RISK']],
+        ['&sla=BREACHED', ['BREACHED']],
+        ['&sla=AT_RISK&sla=BREACHED', ['AT_RISK', 'BREACHED']],
+      ];
+      for (const [query, wanted] of filters) {
+        const filtered = await list(query);
+        const expected = titlesWhere(wanted);
+        expect(expected.length).toBeGreaterThan(0);
+        expect(filtered.total).toBe(expected.length);
+        expect(filtered.items.map((t) => t.title).sort()).toEqual(expected);
+      }
+      return all.items;
+    }
+
     it('para AT_RISK, BREACHED e os dois juntos', { timeout: 30_000 }, async () => {
       const now = Date.now();
       // Relógio parado há 5 h: com o "agora", as posições dariam outro resultado.
@@ -509,33 +685,147 @@ describe.skipIf(!TEST_DATABASE_URL)('SLA (e2e)', () => {
       }
       await prisma.ticket.createMany({ data });
 
-      const list = async (query: string) => {
-        const res = await as(agent).get(`/api/tickets?pageSize=100${query}`).expect(200);
-        return res.body.items as TicketSummary[];
-      };
-      const all = await list('');
-      expect(all).toHaveLength(data.length);
-      const states = (t: TicketSummary): SlaState[] => [
-        t.sla!.firstResponse.state,
-        t.sla!.resolution.state,
-      ];
+      const all = await expectFiltersToMatchComputed(data.length);
       // A matriz passa por todos os estados.
       expect(new Set(all.flatMap(states))).toEqual(
         new Set(['OK', 'AT_RISK', 'BREACHED', 'MET', 'PAUSED', 'NOT_APPLICABLE']),
       );
+    });
 
-      const titlesWhere = (wanted: SlaState[]) =>
-        all
-          .filter((t) => states(t).some((s) => wanted.includes(s)))
-          .map((t) => t.title)
-          .sort();
-      const titlesOf = (items: TicketSummary[]) => items.map((t) => t.title).sort();
+    // Os mesmos limites do cálculo, ao milissegundo: risco e prazo exatos, 1 ms
+    // antes e depois, com o relógio correndo, parado e cumprido. Date fica fixo
+    // (só Date: o driver do Postgres precisa dos timers de verdade).
+    it('nos limites exatos de risco, prazo e pausa', { timeout: 30_000 }, async () => {
+      const T = Math.floor(Date.now() / 1000) * 1000;
+      const P = T - 5 * HOUR;
+      const ms = (base: number, delta: number) => new Date(base + delta);
+      const far = (base: number) => ({ risk: ms(base, 8 * HOUR), due: ms(base, 10 * HOUR) });
 
-      expect(titlesOf(await list('&sla=AT_RISK'))).toEqual(titlesWhere(['AT_RISK']));
-      expect(titlesOf(await list('&sla=BREACHED'))).toEqual(titlesWhere(['BREACHED']));
-      expect(titlesOf(await list('&sla=AT_RISK&sla=BREACHED'))).toEqual(
-        titlesWhere(['AT_RISK', 'BREACHED']),
-      );
+      // título → [status, campos, estados esperados [1ª resposta, resolução]]
+      const cases: [
+        string,
+        TicketStatus,
+        Partial<Prisma.TicketCreateManyInput>,
+        [SlaState, SlaState],
+      ][] = [
+        ['res risco = agora', 'IN_PROGRESS', { resolutionRiskAt: ms(T, 0) }, ['OK', 'AT_RISK']],
+        ['res risco = agora + 1ms', 'IN_PROGRESS', { resolutionRiskAt: ms(T, 1) }, ['OK', 'OK']],
+        [
+          'res prazo = agora',
+          'IN_PROGRESS',
+          { resolutionRiskAt: ms(T, -HOUR), resolutionDueAt: ms(T, 0) },
+          ['OK', 'AT_RISK'],
+        ],
+        [
+          'res prazo = agora - 1ms',
+          'IN_PROGRESS',
+          { resolutionRiskAt: ms(T, -HOUR), resolutionDueAt: ms(T, -1) },
+          ['OK', 'BREACHED'],
+        ],
+        ['1ª risco = agora', 'OPEN', { firstResponseRiskAt: ms(T, 0) }, ['AT_RISK', 'OK']],
+        ['1ª risco = agora + 1ms', 'OPEN', { firstResponseRiskAt: ms(T, 1) }, ['OK', 'OK']],
+        [
+          '1ª prazo = agora',
+          'OPEN',
+          { firstResponseRiskAt: ms(T, -HOUR), firstResponseDueAt: ms(T, 0) },
+          ['AT_RISK', 'OK'],
+        ],
+        [
+          '1ª prazo = agora - 1ms',
+          'OPEN',
+          { firstResponseRiskAt: ms(T, -HOUR), firstResponseDueAt: ms(T, -1) },
+          ['BREACHED', 'OK'],
+        ],
+        [
+          'pausa = prazo da res',
+          'WAITING_CUSTOMER',
+          { resolutionRiskAt: ms(P, -HOUR), resolutionDueAt: ms(P, 0) },
+          ['PAUSED', 'PAUSED'],
+        ],
+        [
+          'pausa = prazo da res + 1ms',
+          'WAITING_CUSTOMER',
+          { resolutionRiskAt: ms(P, -HOUR), resolutionDueAt: ms(P, -1) },
+          ['PAUSED', 'BREACHED'],
+        ],
+        [
+          'pausa = prazo da 1ª',
+          'WAITING_CUSTOMER',
+          { firstResponseRiskAt: ms(P, -HOUR), firstResponseDueAt: ms(P, 0) },
+          ['PAUSED', 'PAUSED'],
+        ],
+        [
+          'pausa = prazo da 1ª + 1ms',
+          'WAITING_CUSTOMER',
+          { firstResponseRiskAt: ms(P, -HOUR), firstResponseDueAt: ms(P, -1) },
+          ['BREACHED', 'PAUSED'],
+        ],
+        [
+          'resolvido no prazo exato',
+          'RESOLVED',
+          { resolutionRiskAt: ms(P, -HOUR), resolutionDueAt: ms(P, 0) },
+          ['NOT_APPLICABLE', 'MET'],
+        ],
+        [
+          'resolvido 1ms depois',
+          'RESOLVED',
+          { resolutionRiskAt: ms(P, -HOUR), resolutionDueAt: ms(P, -1) },
+          ['NOT_APPLICABLE', 'BREACHED'],
+        ],
+        [
+          'respondido no prazo exato',
+          'IN_PROGRESS',
+          {
+            firstResponseDueAt: ms(T, -HOUR),
+            firstResponseRiskAt: ms(T, -2 * HOUR),
+            firstResponseAt: ms(T, -HOUR),
+          },
+          ['MET', 'OK'],
+        ],
+        [
+          'respondido 1ms depois',
+          'IN_PROGRESS',
+          {
+            firstResponseDueAt: ms(T, -HOUR),
+            firstResponseRiskAt: ms(T, -2 * HOUR),
+            firstResponseAt: ms(T, -HOUR + 1),
+          },
+          ['BREACHED', 'OK'],
+        ],
+      ];
+      await prisma.ticket.createMany({
+        data: cases.map(([title, status, fields]) => {
+          const running = SLA_RUNNING_STATUSES.includes(status);
+          const base = far(running ? T : P);
+          return {
+            title,
+            description: 'limites',
+            requesterId: customer.id,
+            status,
+            createdAt: ms(T, -30 * HOUR),
+            firstResponseDueAt: base.due,
+            firstResponseRiskAt: base.risk,
+            resolutionDueAt: base.due,
+            resolutionRiskAt: base.risk,
+            slaPausedAt: running ? null : new Date(P),
+            resolvedAt: status === 'RESOLVED' ? new Date(P) : null,
+            ...fields,
+          };
+        }),
+      });
+
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(T);
+      try {
+        const all = await expectFiltersToMatchComputed(cases.length);
+        const stateOf = new Map(
+          all.map((t) => [t.title, [t.sla!.firstResponse.state, t.sla!.resolution.state]]),
+        );
+        for (const [title, , , expected] of cases)
+          expect([title, stateOf.get(title)]).toEqual([title, expected]);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

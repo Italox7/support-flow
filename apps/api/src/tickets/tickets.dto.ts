@@ -1,6 +1,8 @@
 import { Priority, TicketStatus } from '@support-flow/shared';
 import { Transform, Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  ArrayUnique,
   IsBoolean,
   IsIn,
   IsInt,
@@ -41,6 +43,9 @@ export class ListTicketsQuery {
   @IsOptional()
   @Transform(toArray)
   @IsIn(SLA_FILTERS, { each: true })
+  // Cada valor repetido viraria mais ramos de OR na consulta: no máximo um de cada.
+  @ArrayUnique()
+  @ArrayMaxSize(SLA_FILTERS.length)
   sla?: SlaFilter[];
 
   /** UUID do agente, `me` (o próprio usuário) ou `none` (sem responsável). */

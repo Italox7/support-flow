@@ -50,6 +50,14 @@ Desenho revisado pelo Archie antes do código.
   conta do código e grava a pausa que a Fase 3 não gravava: `resolvedAt` em RESOLVED e
   CLOSED, `updatedAt` em WAITING_CUSTOMER. Esta é aproximada (um PATCH também mexe em
   `updatedAt`): risco aceito, os dados atuais são de teste.
+- **Comentário em RESOLVED não vira 1ª resposta**: o veredito de um ticket resolvido
+  não muda (a 1ª resposta continua NOT_APPLICABLE ou BREACHED). `?sla=` aceita no
+  máximo um de cada valor (repetidos multiplicariam o OR da consulta).
+- **Risco conhecido (Gard)**: a equipe consegue melhorar a própria métrica, baixando a
+  prioridade de um ticket estourado (os prazos são recalculados desde a abertura) ou
+  pausando em WAITING_CUSTOMER, sem histórico. Aceito para o MVP; se o SLA for usado
+  para avaliar pessoas, pede auditoria de mudanças. A edição de política fica no log
+  (`sla_policy_updated`, com o admin e os valores antes e depois).
 - **Sem índice novo**: os filtros são OR entre dois relógios; medir com EXPLAIN num seed
   grande antes de criar (`[status, resolutionRiskAt]` é o candidato).
 - **Fora desta fase**: horário comercial, alertas e jobs de estouro, métricas de SLA,

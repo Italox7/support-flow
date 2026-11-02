@@ -87,6 +87,7 @@ export async function resetDatabase(prisma: PrismaService): Promise<void> {
 /**
  * Status gravado direto no banco, sem passar pelas regras, mas respeitando o
  * CHECK do SLA: relógio parado tem `slaPausedAt`, relógio correndo não tem.
+ * Só entende `status` como string; `{ set: ... }` passa direto e o CHECK acusa.
  */
 export function withSlaClock(data: Prisma.TicketUpdateInput): Prisma.TicketUpdateInput {
   if (typeof data.status !== 'string' || data.slaPausedAt !== undefined) return data;

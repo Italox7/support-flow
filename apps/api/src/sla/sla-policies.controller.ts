@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, ParseEnumPipe, Put } from '@nestjs/common';
 import { Priority, type SlaPolicyDto } from '@support-flow/shared';
-import { Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import type { RequestUser } from '../auth/auth.types.js';
 import { UpdateSlaPolicyDto } from './sla-policies.dto.js';
 import { SlaPoliciesService } from './sla-policies.service.js';
 
@@ -19,9 +20,10 @@ export class SlaPoliciesController {
   @Put(':priority')
   @Roles('ADMIN')
   update(
+    @CurrentUser() user: RequestUser,
     @Param('priority', new ParseEnumPipe(Priority)) priority: Priority,
     @Body() dto: UpdateSlaPolicyDto,
   ): Promise<SlaPolicyDto> {
-    return this.policies.update(priority, dto);
+    return this.policies.update(user, priority, dto);
   }
 }

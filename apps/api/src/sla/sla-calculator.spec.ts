@@ -64,6 +64,8 @@ describe('computeSla — 1ª resposta sem resposta', () => {
     ['WAITING_CUSTOMER', 61, 'BREACHED'],
     ['RESOLVED', 47, 'NOT_APPLICABLE'],
     ['RESOLVED', 55, 'NOT_APPLICABLE'],
+    ['RESOLVED', 60, 'NOT_APPLICABLE'],
+    ['CLOSED', 60, 'NOT_APPLICABLE'],
     ['RESOLVED', 61, 'BREACHED'],
     ['CLOSED', 55, 'NOT_APPLICABLE'],
     ['CLOSED', 61, 'BREACHED'],
@@ -104,6 +106,7 @@ describe('computeSla — resolução', () => {
     ['IN_PROGRESS', 241, 'BREACHED'],
     ['WAITING_CUSTOMER', 191, 'PAUSED'],
     ['WAITING_CUSTOMER', 200, 'PAUSED'],
+    ['WAITING_CUSTOMER', 240, 'PAUSED'],
     ['WAITING_CUSTOMER', 241, 'BREACHED'],
     ['RESOLVED', 200, 'MET'],
     ['RESOLVED', 240, 'MET'],
@@ -181,6 +184,22 @@ describe('slaTransitionPatch', () => {
     });
   });
 
+  it('retomar sem slaPausedAt (impedido pelo CHECK) não mexe em nada', () => {
+    expect(slaTransitionPatch('WAITING_CUSTOMER', 'IN_PROGRESS', ticket(), now)).toEqual({
+      data: {},
+      guard: {},
+    });
+  });
+
+  it('relógio do servidor voltando para antes da pausa não gera pausa negativa', () => {
+    const paused = ticket({ status: 'WAITING_CUSTOMER', slaPausedAt: at(110) });
+    const { data } = slaTransitionPatch('WAITING_CUSTOMER', 'IN_PROGRESS', paused, now);
+    expect(data.pausedSeconds).toBe(0);
+    expect(data.resolutionDueAt).toEqual(paused.resolutionDueAt);
+    const answeredAt = firstResponsePatch(paused, now).data;
+    expect(answeredAt.firstResponseDueAt).toEqual(paused.firstResponseDueAt);
+  });
+
   it('a 1ª resposta já dada não é empurrada na retomada', () => {
     const answered = ticket({ status: 'RESOLVED', slaPausedAt: at(40), firstResponseAt: at(10) });
     const { data, guard } = slaTransitionPatch('RESOLVED', 'IN_PROGRESS', answered, now);
@@ -211,6 +230,58 @@ describe('slaTransitionPatch', () => {
       resolutionDueAt: state.resolutionDueAt,
       resolutionRiskAt: state.resolutionRiskAt,
     });
+  });
+});
+
+describe('sequências', () => {
+  const apply = (state: SlaSnapshot, patch: { data: object }, status?: TicketStatus) =>
+    ({ ...state, ...patch.data, ...(status && { status }) }) as SlaSnapshot;
+  const deadlinesOf = (s: SlaSnapshot) => ({
+    firstResponseDueAt: s.firstResponseDueAt,
+    firstResponseRiskAt: s.firstResponseRiskAt,
+    resolutionDueAt: s.resolutionDueAt,
+    resolutionRiskAt: s.resolutionRiskAt,
+  });
+
+  it('trocar a prioridade durante a pausa ou depois da retomada dá os mesmos prazos', () => {
+    const pause = (s: SlaSnapshot) =>
+      apply(
+        s,
+        slaTransitionPatch('IN_PROGRESS', 'WAITING_CUSTOMER', s, at(20)),
+        'WAITING_CUSTOMER',
+      );
+    const resume = (s: SlaSnapshot) =>
+      apply(s, slaTransitionPatch('WAITING_CUSTOMER', 'IN_PROGRESS', s, at(95.5)), 'IN_PROGRESS');
+    const toLow = (s: SlaSnapshot) => apply(s, priorityChangePatch(s, low));
+
+    const start = ticket({ status: 'IN_PROGRESS' });
+    expect(deadlinesOf(resume(toLow(pause(start))))).toEqual(
+      deadlinesOf(toLow(resume(pause(start)))),
+    );
+  });
+
+  it('a 1ª resposta dada na pausa fica congelada depois da retomada e da troca de prioridade', () => {
+    let state = ticket({ status: 'IN_PROGRESS' });
+    state = apply(
+      state,
+      slaTransitionPatch('IN_PROGRESS', 'WAITING_CUSTOMER', state, at(50)),
+      'WAITING_CUSTOMER',
+    );
+    state = apply(state, firstResponsePatch(state, at(80)));
+    const frozen = state.firstResponseDueAt;
+    state = apply(
+      state,
+      slaTransitionPatch('WAITING_CUSTOMER', 'IN_PROGRESS', state, at(120)),
+      'IN_PROGRESS',
+    );
+    state = apply(state, priorityChangePatch(state, low));
+
+    expect(state.firstResponseDueAt).toEqual(frozen);
+    expect(computeSla(state, at(10_000)).firstResponse.state).toBe('MET');
+    // A resolução seguiu andando: a pausa inteira (70 min) entrou nela.
+    expect(state.resolutionDueAt).toEqual(
+      computeDeadlines(createdAt, low, 70 * 60).resolutionDueAt,
+    );
   });
 });
 

@@ -130,6 +130,8 @@ export function slaTransitionPatch(
   const wasRunning = SLA_CLOCK[from] === 'RUNNING';
   const runs = SLA_CLOCK[to] === 'RUNNING';
   if (wasRunning && !runs) return { data: { slaPausedAt: now }, guard: {} };
+  // Retomar sem slaPausedAt não acontece: o CHECK tickets_sla_paused_check exige a
+  // pausa em todo status parado. A checagem só estreita o tipo; não "conserte".
   if (wasRunning || !runs || !ticket.slaPausedAt) return { data: {}, guard: {} };
 
   const seconds = Math.max(0, Math.floor((now.getTime() - ticket.slaPausedAt.getTime()) / 1000));
