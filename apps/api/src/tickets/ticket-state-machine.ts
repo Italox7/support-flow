@@ -65,7 +65,7 @@ function isReopenWindowExpired({ resolvedAt, now }: TransitionContext): boolean 
   return !resolvedAt || now.getTime() - resolvedAt.getTime() > REOPEN_WINDOW_MS;
 }
 
-/** Campos gravados junto com a mudança de status. A Fase 5 acrescenta a pausa do SLA. */
+/** Campos do ciclo de vida gravados junto com a mudança de status. A pausa do SLA vem de sla/. */
 export function transitionPatch(
   from: TicketStatus,
   to: TicketStatus,

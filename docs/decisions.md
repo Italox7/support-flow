@@ -2,6 +2,56 @@
 
 Registro curto das decisões que não são óbvias pelo código. A mais recente fica no topo.
 
+## 2026-11-02 — SLA (Fase 5)
+
+Desenho revisado pelo Archie antes do código.
+
+- **Onde o relógio corre**: `SLA_CLOCK` em `apps/api/src/sla` (regra do servidor, não
+  de `packages/shared`), um `Record` exaustivo por status: corre em OPEN e IN_PROGRESS,
+  pausa em WAITING_CUSTOMER e RESOLVED, para em CLOSED. Não é o `OPEN_STATUSES` da
+  atribuição.
+- **Prazos e "em risco" materializados**: além dos `*DueAt`, o ticket grava `*RiskAt`
+  (80% do prazo, em ms inteiros) para o filtro da fila ser um `where` do Prisma, sem SQL
+  cru. O 0,8 fica congelado nos dados: mudar a fração pede migration que recalcule.
+- **Estado calculado na leitura** por `computeSla(ticket, now)`, só com os campos do
+  ticket, sem a política: editar a política não muda o estado de tickets existentes.
+  Relógio parado vale onde parou (`slaPausedAt`), inclusive em RESOLVED vindo de
+  WAITING_CUSTOMER. Precedência: MET > BREACHED > PAUSED/NOT_APPLICABLE > AT_RISK > OK.
+  O filtro `?sla=` (`sla-filters.ts`) espelha a mesma regra; um E2E com a matriz status ×
+  1ª resposta × posição do relógio exige que os dois concordem ticket a ticket.
+- **Pausa e retomada em `applyTransition`**: ao pausar grava `slaPausedAt`; ao retomar
+  soma o tempo parado (segundos inteiros, o mesmo Δ em tudo) a `pausedSeconds` e aos
+  prazos. Invariante: enquanto não há 1ª resposta, prazos gravados =
+  `computeDeadlines(createdAt, política, pausedSeconds)`. Um CHECK no banco garante
+  `slaPausedAt` presente se e só se o relógio não corre (fica fora do `schema.prisma`).
+- **A 1ª resposta congela o prazo dela**: retomada e troca de prioridade não mexem mais
+  nele, senão uma pausa posterior viraria um BREACHED antigo em MET. Se a resposta chega
+  com o ticket pausado, o prazo recebe a parte da pausa já decorrida: o "cumpriu?" é
+  medido onde o relógio parou.
+- **Sem resposta e resolvido antes do prazo**: a 1ª resposta fica `NOT_APPLICABLE` em
+  RESOLVED e CLOSED (decisão do usuário). Reabrindo, o relógio volta a correr.
+- **Escritas concorrentes sem lock comum**: o PATCH (sob o lock da atribuição) só grava
+  se status, `pausedSeconds` e, ao recalcular a 1ª resposta, `firstResponseAt: null`
+  ainda forem os lidos. A retomada regrava prazos como valores absolutos, então só vale se
+  os `*DueAt` lidos não mudaram; a 1ª resposta, se a pausa e o prazo não mudaram. Para o
+  usuário, a perda é 409; um efeito de comentário relê e tenta de novo uma vez. E2E (a)–(e)
+  em `sla.e2e-spec.ts` prendem a linha do ticket para forçar cada intercalação.
+- **Troca de prioridade em RESOLVED é 409**, como em CLOSED: o veredito de um ticket
+  resolvido não muda depois (decisão do usuário). Reabrindo, pode trocar.
+- **O cliente não vê o SLA**: a chave `sla` nem existe na resposta dele, e `?sla=` vindo
+  dele é 403 (ignorar fingiria um filtro; aplicar revelaria o estado).
+- **Políticas**: `GET /sla-policies` (equipe) e `PUT /sla-policies/:priority` (admin),
+  inteiros de 1 min a 30 dias, 1ª resposta menor que a resolução. Vale para tickets novos
+  e trocas de prioridade, sem recalcular os existentes.
+- **Migration** (`20261102000000_sla_risk_and_pause`): preenche os `*RiskAt` com a mesma
+  conta do código e grava a pausa que a Fase 3 não gravava: `resolvedAt` em RESOLVED e
+  CLOSED, `updatedAt` em WAITING_CUSTOMER. Esta é aproximada (um PATCH também mexe em
+  `updatedAt`): risco aceito, os dados atuais são de teste.
+- **Sem índice novo**: os filtros são OR entre dois relógios; medir com EXPLAIN num seed
+  grande antes de criar (`[status, resolutionRiskAt]` é o candidato).
+- **Fora desta fase**: horário comercial, alertas e jobs de estouro, métricas de SLA,
+  histórico de política, recálculo ao editar a política, SLA visível ao cliente.
+
 ## 2026-11-01 — Atribuição (Fase 4)
 
 Desenho revisado pelo Archie antes do código.

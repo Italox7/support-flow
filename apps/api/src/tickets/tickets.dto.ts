@@ -14,6 +14,7 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
+import { SLA_FILTERS, type SlaFilter } from '../sla/sla-filters.js';
 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 const isPresent = (_object: object, value: unknown) => value !== undefined;
@@ -35,6 +36,12 @@ export class ListTicketsQuery {
   @Transform(toArray)
   @IsIn(PRIORITIES, { each: true })
   priority?: Priority[];
+
+  /** Só para a equipe (403 para o cliente). Um ticket entra se um dos relógios estiver no estado. */
+  @IsOptional()
+  @Transform(toArray)
+  @IsIn(SLA_FILTERS, { each: true })
+  sla?: SlaFilter[];
 
   /** UUID do agente, `me` (o próprio usuário) ou `none` (sem responsável). */
   @IsOptional()

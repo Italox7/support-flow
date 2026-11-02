@@ -12,6 +12,7 @@ import {
   resetDatabase,
   TEST_DATABASE_URL,
   type Actor,
+  withSlaClock,
 } from './e2e-setup.js';
 
 const MISSING = '00000000-0000-4000-8000-000000000000';
@@ -43,7 +44,7 @@ describe.skipIf(!TEST_DATABASE_URL)('atribuição (e2e)', () => {
   }
 
   async function setTicket(id: string, data: Prisma.TicketUpdateInput): Promise<void> {
-    await prisma.ticket.update({ where: { id }, data });
+    await prisma.ticket.update({ where: { id }, data: withSlaClock(data) });
   }
 
   /**
@@ -243,7 +244,9 @@ describe.skipIf(!TEST_DATABASE_URL)('atribuição (e2e)', () => {
           description: 'órfão',
           requesterId: customer.id,
           firstResponseDueAt: new Date(base + (101 - i) * HOUR),
+          firstResponseRiskAt: new Date(base + (101 - i) * HOUR),
           resolutionDueAt: new Date(base + (101 - i) * 2 * HOUR),
+          resolutionRiskAt: new Date(base + (101 - i) * 2 * HOUR),
         })),
       });
 
