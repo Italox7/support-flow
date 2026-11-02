@@ -18,6 +18,17 @@ export const TicketStatus = {
 } as const;
 export type TicketStatus = (typeof TicketStatus)[keyof typeof TicketStatus];
 
+/**
+ * Ticket "em aberto" para a atribuição: conta como carga do responsável e, sem
+ * responsável, é um órfão. Não é o conjunto em que o SLA corre (em
+ * WAITING_CUSTOMER ele está pausado): o SLA tem o seu.
+ */
+export const OPEN_STATUSES = [
+  TicketStatus.OPEN,
+  TicketStatus.IN_PROGRESS,
+  TicketStatus.WAITING_CUSTOMER,
+] as const satisfies readonly TicketStatus[];
+
 export const Priority = {
   LOW: 'LOW',
   MEDIUM: 'MEDIUM',

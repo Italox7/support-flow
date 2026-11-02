@@ -1,23 +1,26 @@
-import { JwtService } from '@nestjs/jwt';
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import type { Role, TicketDetail } from '@support-flow/shared';
+import type { TicketDetail } from '@support-flow/shared';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type { AccessTokenPayload } from '../src/auth/auth.types.js';
 import type { Prisma } from '../src/generated/prisma/client.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
 import { TicketsService } from '../src/tickets/tickets.service.js';
-import { createApp, resetDatabase, TEST_DATABASE_URL } from './e2e-setup.js';
+import {
+  createActor,
+  createApp,
+  resetDatabase,
+  TEST_DATABASE_URL,
+  type Actor,
+} from './e2e-setup.js';
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 /** Datas de abertura distintas: dois tickets no mesmo ms trocariam de ordem. */
 const hoursAgo = (hours: number) => new Date(Date.now() - hours * HOUR);
 
-interface Actor {
-  id: string;
-  token: string;
-}
+// Os agentes daqui ficam indisponíveis: o ticket nasce sem responsável e cada
+// teste atribui quem precisar. A atribuição automática é testada em
+// assignment.e2e-spec.ts.
 
 describe.skipIf(!TEST_DATABASE_URL)('tickets (e2e)', () => {
   let app: NestExpressApplication;
@@ -34,15 +37,6 @@ describe.skipIf(!TEST_DATABASE_URL)('tickets (e2e)', () => {
     post: (url: string) => http().post(url).set('Authorization', `Bearer ${actor.token}`),
     patch: (url: string) => http().patch(url).set('Authorization', `Bearer ${actor.token}`),
   });
-
-  /** Usuário criado direto no banco, com o token assinado como o login faria. */
-  async function createActor(role: Role, name: string): Promise<Actor> {
-    const user = await prisma.user.create({
-      data: { email: `${name}@example.com`, name, role, passwordHash: 'sem-login' },
-    });
-    const payload: AccessTokenPayload = { sub: user.id, role };
-    return { id: user.id, token: await app.get(JwtService).signAsync(payload) };
-  }
 
   async function openTicket(by: Actor, body: object = {}): Promise<TicketDetail> {
     const res = await as(by)
@@ -68,11 +62,11 @@ describe.skipIf(!TEST_DATABASE_URL)('tickets (e2e)', () => {
 
   beforeEach(async () => {
     await resetDatabase(prisma);
-    customer = await createActor('CUSTOMER', 'cliente');
-    otherCustomer = await createActor('CUSTOMER', 'outro-cliente');
-    agent = await createActor('AGENT', 'agente');
-    otherAgent = await createActor('AGENT', 'outro-agente');
-    admin = await createActor('ADMIN', 'admin');
+    customer = await createActor(app, 'CUSTOMER', 'cliente');
+    otherCustomer = await createActor(app, 'CUSTOMER', 'outro-cliente');
+    agent = await createActor(app, 'AGENT', 'agente', { isAvailable: false });
+    otherAgent = await createActor(app, 'AGENT', 'outro-agente', { isAvailable: false });
+    admin = await createActor(app, 'ADMIN', 'admin');
   });
 
   it('exige autenticação', async () => {
@@ -81,7 +75,7 @@ describe.skipIf(!TEST_DATABASE_URL)('tickets (e2e)', () => {
   });
 
   describe('POST /api/tickets', () => {
-    it('abre o ticket em OPEN, sem responsável, com os prazos da política MEDIUM', async () => {
+    it('sem agente disponível, abre em OPEN, sem responsável, com os prazos da MEDIUM', async () => {
       const ticket = await openTicket(customer);
 
       expect(ticket).toEqual({
@@ -252,14 +246,6 @@ describe.skipIf(!TEST_DATABASE_URL)('tickets (e2e)', () => {
       const ticket = await openTicket(customer);
       await setTicket(ticket.id, { status: 'CLOSED' });
       await as(agent).patch(`/api/tickets/${ticket.id}`).send({ priority: 'LOW' }).expect(409);
-    });
-
-    it('não aceita trocar o responsável (Fase 4)', async () => {
-      const ticket = await openTicket(customer);
-      await as(admin)
-        .patch(`/api/tickets/${ticket.id}`)
-        .send({ priority: 'LOW', assigneeId: agent.id })
-        .expect(400);
     });
   });
 

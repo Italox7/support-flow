@@ -54,7 +54,7 @@ export class TicketsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateTicketDto,
   ): Promise<TicketDetail> {
-    return this.tickets.updatePriority(user, id, dto);
+    return this.tickets.update(user, id, dto);
   }
 
   @Post(':id/transitions')

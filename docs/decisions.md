@@ -2,6 +2,57 @@
 
 Registro curto das decisões que não são óbvias pelo código. A mais recente fica no topo.
 
+## 2026-11-01 — Atribuição (Fase 4)
+
+Desenho revisado pelo Archie antes do código.
+
+- **Um lock global de atribuição** (`pg_advisory_xact_lock`, chave fixa no
+  `AssignmentService`). É sempre a primeira instrução da transação, que só o `inLock` abre,
+  com `maxWait`/`timeout` explícitos. Os métodos que escolhem agente exigem um `LockedTx`:
+  passar uma transação sem o lock não compila. Lock de transação funciona no pooler do
+  Supabase em modo transação; um lock de sessão não funcionaria. Lock por linha
+  (`FOR UPDATE` nos agentes) arriscaria deadlock sem ganho nesta escala.
+- **Pegam o lock**: criação de ticket, mudança de disponibilidade e `PATCH /tickets/:id`
+  (mesmo só de prioridade: um caminho só vale mais que os milissegundos de fila).
+  Transições não pegam: um ticket resolvido ou reaberto ao mesmo tempo deixa a carga lida
+  defasada em 1 (escolha um pouco pior), nunca dois tickets vendo a mesma carga.
+- **Espera pelo lock de no máximo 2 s** (`lock_timeout` local da transação), depois 503. Quem
+  espera ocupa uma conexão do pool: sem o limite, ~10 criações simultâneas esgotariam o pool
+  e parariam a API inteira, `/api/health` incluído. O PATCH de disponibilidade tem 10/min,
+  porque ficar disponível varre órfãos segurando o lock.
+- **O PATCH do ticket é otimista**: só grava se `status` e `pausedSeconds` ainda forem os
+  lidos, senão 409. Pré-condição da Fase 5, em que a pausa e a retomada do SLA mudam esses
+  campos sem o lock.
+- **"Em aberto" tem uma definição só**: `OPEN_STATUSES` em `packages/shared` (OPEN,
+  IN_PROGRESS, WAITING_CUSTOMER). WAITING_CUSTOMER conta como carga. Não é o conjunto em
+  que o SLA corre (lá ele está pausado): a Fase 5 define o seu.
+- **Ficar indisponível não redistribui**: o agente mantém os tickets e só sai da fila.
+  Ficar disponível distribui os órfãos abertos na mesma transação, os de prazo mais curto
+  primeiro, até 100 por vez; o resto espera o job diário (Fase 7). Se só um agente voltar,
+  ele recebe o lote inteiro: é o que a regra de menor carga manda.
+- **Reatribuir é só do admin**, pelo mesmo `PATCH /tickets/:id` da prioridade. Se o agente
+  mandar `assigneeId`, a requisição inteira recebe 403, nada é aplicado em parte. O admin
+  pode escolher um agente indisponível. A reatribuição não muda o status nem o
+  `lastAssignedAt` (cursor da fila automática). `null` não é aceito: desatribuir criaria um
+  órfão que a varredura reatribuiria.
+- **Primeiro 422 da API**: `assigneeId` válido no formato, mas que não é de um agente. O
+  400 continua sendo do formato (ValidationPipe). Ordem: 400 → 404 → 403 → 409 → 422.
+- **Fronteira**: `assignment/` não importa `tickets/` nem `users/` (regra
+  `no-restricted-imports` no ESLint).
+- **Fora desta fase**: criar agente (`POST /users/agents`, antes da Fase 6, com o Gard) e
+  `POST /jobs/run` (Fase 7). Até lá, agentes vêm do seed ou do banco.
+- **Pendências registradas pelo Gard**:
+  - limite por usuário no `POST /tickets` **bloqueia o deploy** (P1 a partir dele: o
+    cadastro é aberto e cada criação entra na fila do lock). O PATCH do ticket já checa
+    escopo e papel antes da fila: cliente e agente sem permissão não a ocupam;
+  - o 503 do lock não manda `Retry-After`: o front (Fase 6) tenta de novo com espera;
+  - esperar mais que o `maxWait` por uma conexão do pool vira 500, não 503;
+  - rebaixar um agente (quando houver troca de papel) tem de reatribuir os tickets dele e
+    revogar os refresh tokens;
+  - `isAvailable` nasce `true` em todo usuário; o filtro `role: AGENT` está em toda consulta
+    da atribuição. Default `false` ou um CHECK no banco pedem migration.
+  - `lock_timeout` e tamanho do pool: medir com o Pipe no staging (Fase 7).
+
 ## 2026-11-01 — Tickets e comentários (Fase 3)
 
 Contrato e schema revisados pelo Archie antes do código.
@@ -26,7 +77,7 @@ total}`). Cursor não compensa nesta escala e complica a numeração de páginas
   calculados na criação e toda prioridade precisa de política em qualquer ambiente. Os E2E
   não apagam `sla_policies`.
 - **Sem auto-atribuição nesta fase**: sem responsável, só o admin tira um ticket de OPEN. A
-  atribuição é da Fase 4.
+  atribuição veio na Fase 4.
 - **Rate limit global** (120/min por rota e por IP), antes da autenticação; `/auth` mantém
   30/min e 5/min nas rotas que verificam senha. Vale também para `/api/health`: com
   `TRUST_PROXY` errado, todos dividem o IP do proxy e o health check do Render pode levar 429.

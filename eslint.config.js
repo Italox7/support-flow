@@ -15,6 +15,23 @@ export default defineConfig(
     languageOptions: { globals: globals.node },
   },
   {
+    // Fronteira do módulo de atribuição: tickets/ e users/ dependem dele, nunca o contrário.
+    files: ['apps/api/src/assignment/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/tickets/**', '**/users/**'],
+              message: 'assignment/ não importa tickets/ nem users/: eles é que dependem dele.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ['apps/web/src/**/*.{ts,tsx}'],
     languageOptions: { globals: globals.browser },
     plugins: { 'react-hooks': reactHooks, 'react-refresh': reactRefresh },
