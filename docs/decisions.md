@@ -28,7 +28,10 @@ total}`). Cursor não compensa nesta escala e complica a numeração de páginas
 - **Sem auto-atribuição nesta fase**: sem responsável, só o admin tira um ticket de OPEN. A
   atribuição é da Fase 4.
 - **Rate limit global** (120/min por rota e por IP), antes da autenticação; `/auth` mantém
-  30/min e 5/min nas rotas que verificam senha.
+  30/min e 5/min nas rotas que verificam senha. Vale também para `/api/health`: com
+  `TRUST_PROXY` errado, todos dividem o IP do proxy e o health check do Render pode levar 429.
+  Revisar com o Pipe na Fase 7 (`@SkipThrottle` ou limite próprio).
+- **O front trata o 409 de concorrência** (Fase 6) pedindo para recarregar o ticket.
 - **E2E rodam um arquivo por vez** (projeto `e2e` do Vitest): os arquivos dividem o banco.
 
 ## 2026-10-29 — Autenticação (Fase 2)
