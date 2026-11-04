@@ -2,6 +2,40 @@
 
 Registro curto das decisões que não são óbvias pelo código. A mais recente fica no topo.
 
+## 2026-11-03 — Criar agente e contrato para o front (antes da Fase 6)
+
+Desenho revisado pelo Archie antes do código.
+
+- **`POST /users/agents` (admin)**: o admin define a senha inicial, com o mesmo mínimo do
+  cadastro (`CreateAgentDto` herda de `RegisterDto`, decisão do usuário). 10/min, porque
+  cada criação calcula um argon2. E-mail repetido é 409, sem promover a conta existente.
+- **O agente nasce indisponível**, contra o default do schema: não recebe tickets antes do
+  primeiro login e a criação dispensa o lock. Ao ficar disponível, a varredura de órfãos é a
+  de sempre.
+- **Risco conhecido**: não há rota de troca de senha, então o admin continua sabendo a senha
+  do agente, e uma conta comprometida só se resolve por SQL. O agente tem mínimo de 8
+  caracteres; o admin do seed, de 12. Aceitável para a demo com dados fictícios (Gard, P2).
+  **Antes de dar conta de agente a uma pessoa real ou atender dados reais**: rota de troca que
+  exige a senha atual e revoga os refresh tokens, e limite por e-mail no login.
+- **Pendências de auth que estavam fora deste registro** (Gard, Fase 2): limite por e-mail no
+  login; limitar quantos hashes argon2 rodam ao mesmo tempo.
+- **O limite de 10/min conta antes da autenticação** (rota + IP): um anônimo no mesmo IP gasta
+  o limite do admin, sem pagar argon2. Impacto baixo; com `TRUST_PROXY` errado, todos dividem o
+  IP. A exigência dele em produção é da Fase 7, e o `env.ts` ainda não a impõe.
+- **`Retry-After: 1` só no 503 do lock**, por uma subclasse (`AssignmentBusyException`) e um
+  filtro que escreve o cabeçalho e mantém o corpo. O front só repete sozinho com status 503
+  **e** esse cabeçalho, com um número limitado de tentativas: o throttler também manda
+  `Retry-After` no 429, e uma queda do banco cai no mesmo 503. É seguro porque o lock é a
+  primeira instrução da transação. Falta conferir no staging se o rewrite da Vercel preserva o
+  cabeçalho (Fase 7, com o Pipe); se não preservar, o front só deixa de repetir.
+- **Os botões de transição vêm da API**: `allowedTransitions` em `TicketDetail`, calculado com
+  o próprio `canTransition`, em vez de levar a tabela para `packages/shared`. A regra tem
+  `SYSTEM`, contexto e a janela de 7 dias, que no front dependeria do relógio do navegador.
+  O valor pode estar defasado: o front recarrega o ticket em 403 e 409 na transição (quem
+  perdeu a atribuição em OPEN recebe 403).
+- **Comentar pode mudar o status** e `POST /comments` devolve só o comentário: o front recarrega
+  o ticket depois de comentar. O contrato não muda por isso.
+
 ## 2026-11-02 — SLA (Fase 5)
 
 Desenho revisado pelo Archie antes do código.
@@ -100,13 +134,12 @@ Desenho revisado pelo Archie antes do código.
   400 continua sendo do formato (ValidationPipe). Ordem: 400 → 404 → 403 → 409 → 422.
 - **Fronteira**: `assignment/` não importa `tickets/` nem `users/` (regra
   `no-restricted-imports` no ESLint).
-- **Fora desta fase**: criar agente (`POST /users/agents`, antes da Fase 6, com o Gard) e
-  `POST /jobs/run` (Fase 7). Até lá, agentes vêm do seed ou do banco.
+- **Fora desta fase**: criar agente (`POST /users/agents`, feito antes da Fase 6, ver a
+  entrada de 2026-11-03) e `POST /jobs/run` (Fase 7).
 - **Pendências registradas pelo Gard**:
   - limite por usuário no `POST /tickets` **bloqueia o deploy** (P1 a partir dele: o
     cadastro é aberto e cada criação entra na fila do lock). O PATCH do ticket já checa
     escopo e papel antes da fila: cliente e agente sem permissão não a ocupam;
-  - o 503 do lock não manda `Retry-After`: o front (Fase 6) tenta de novo com espera;
   - esperar mais que o `maxWait` por uma conexão do pool vira 500, não 503;
   - rebaixar um agente (quando houver troca de papel) tem de reatribuir os tickets dele e
     revogar os refresh tokens;

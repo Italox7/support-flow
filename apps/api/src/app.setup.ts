@@ -1,6 +1,7 @@
 import { ValidationPipe } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
+import { AssignmentBusyFilter } from './assignment/assignment-busy.js';
 import type { Env } from './config/env.js';
 
 /** Configuração comum a main.ts e aos testes E2E, para testarmos o app como ele roda. */
@@ -12,4 +13,5 @@ export function configureApp(app: NestExpressApplication, env: Env): void {
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
   );
+  app.useGlobalFilters(new AssignmentBusyFilter());
 }

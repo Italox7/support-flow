@@ -1,9 +1,11 @@
 import { TicketStatus } from '@support-flow/shared';
 import { describe, expect, it } from 'vitest';
 import {
+  allowedTransitions,
   canTransition,
   commentEffects,
   REOPEN_WINDOW_MS,
+  transitionContext,
   transitionPatch,
   type Actor,
   type TransitionContext,
@@ -70,6 +72,76 @@ describe('canTransition', () => {
     it('recusa sem data de resolução', () => {
       expect(reopen(null)).toEqual({ ok: false, reason: 'REOPEN_WINDOW_EXPIRED' });
     });
+  });
+});
+
+describe('allowedTransitions', () => {
+  const links = { isRequester: false, isAssignee: false, resolvedAt: null, now };
+  const owner = { ...links, isRequester: true };
+  const assignee = { ...links, isAssignee: true };
+  const resolvedAgo = (ms: number) => ({ ...owner, resolvedAt: new Date(now.getTime() - ms) });
+
+  it.each([
+    [
+      'cliente em RESOLVED, dentro da janela',
+      'RESOLVED',
+      'CUSTOMER',
+      resolvedAgo(1000),
+      ['IN_PROGRESS'],
+    ],
+    [
+      'cliente em RESOLVED, no limite de 7 dias',
+      'RESOLVED',
+      'CUSTOMER',
+      resolvedAgo(REOPEN_WINDOW_MS),
+      ['IN_PROGRESS'],
+    ],
+    [
+      'cliente em RESOLVED, fora da janela',
+      'RESOLVED',
+      'CUSTOMER',
+      resolvedAgo(REOPEN_WINDOW_MS + 1),
+      [],
+    ],
+    ['cliente em RESOLVED, sem resolvedAt', 'RESOLVED', 'CUSTOMER', owner, []],
+    ['cliente dono em IN_PROGRESS', 'IN_PROGRESS', 'CUSTOMER', owner, ['RESOLVED']],
+    ['cliente dono em OPEN', 'OPEN', 'CUSTOMER', owner, []],
+    ['outro cliente em IN_PROGRESS', 'IN_PROGRESS', 'CUSTOMER', links, []],
+    ['agente não atribuído em OPEN', 'OPEN', 'AGENT', links, []],
+    ['agente atribuído em OPEN', 'OPEN', 'AGENT', assignee, ['IN_PROGRESS']],
+    ['agente em IN_PROGRESS', 'IN_PROGRESS', 'AGENT', links, ['WAITING_CUSTOMER', 'RESOLVED']],
+    ['agente em WAITING_CUSTOMER', 'WAITING_CUSTOMER', 'AGENT', links, ['IN_PROGRESS', 'RESOLVED']],
+    ['agente em RESOLVED', 'RESOLVED', 'AGENT', assignee, []],
+    ['admin em OPEN', 'OPEN', 'ADMIN', links, ['IN_PROGRESS']],
+    ['admin em RESOLVED', 'RESOLVED', 'ADMIN', { ...links, resolvedAt: now }, []],
+  ] as const)('%s', (_case, from, actor, ctx, expected) => {
+    expect(allowedTransitions(from, actor, ctx)).toEqual(expected);
+  });
+
+  it('nada sai de CLOSED, e CLOSED nunca é oferecido: fechar é só do job', () => {
+    for (const actor of ['CUSTOMER', 'AGENT', 'ADMIN'] as const) {
+      for (const from of STATUSES) {
+        const list = allowedTransitions(from, actor, {
+          ...owner,
+          isAssignee: true,
+          resolvedAt: now,
+        });
+        expect(list).not.toContain('CLOSED');
+        if (from === 'CLOSED') expect(list).toEqual([]);
+      }
+    }
+  });
+});
+
+describe('transitionContext', () => {
+  const ticket = { requesterId: 'cliente', assigneeId: 'agente', resolvedAt: now };
+
+  it.each([
+    ['cliente', { isRequester: true, isAssignee: false }],
+    ['agente', { isRequester: false, isAssignee: true }],
+    ['outro', { isRequester: false, isAssignee: false }],
+  ])('vínculo de %s com o ticket', (id, expected) => {
+    expect(transitionContext(ticket, { id }, now)).toEqual({ ...expected, resolvedAt: now, now });
   });
 });
 

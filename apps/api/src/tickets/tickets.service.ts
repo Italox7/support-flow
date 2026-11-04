@@ -29,8 +29,10 @@ import {
 import { computeDeadlines } from '../sla/sla-deadlines.js';
 import { slaWhere } from '../sla/sla-filters.js';
 import {
+  allowedTransitions,
   canTransition,
   commentEffects,
+  transitionContext,
   transitionPatch,
   type TransitionRejection,
 } from './ticket-state-machine.js';
@@ -206,12 +208,12 @@ export class TicketsService {
     return this.prisma.$transaction(async (tx) => {
       const ticket = await this.findScoped(tx, user, id);
       const now = new Date();
-      const check = canTransition(ticket.status, to, user.role, {
-        isRequester: ticket.requesterId === user.id,
-        isAssignee: ticket.assigneeId === user.id,
-        resolvedAt: ticket.resolvedAt,
-        now,
-      });
+      const check = canTransition(
+        ticket.status,
+        to,
+        user.role,
+        transitionContext(ticket, user, now),
+      );
       if (!check.ok) throw rejection(check.reason);
 
       if (!(await this.applyTransition(tx, ticket, to, now))) {
@@ -367,5 +369,10 @@ function toTicketDetail(
     firstResponseAt: iso(ticket.firstResponseAt),
     resolvedAt: iso(ticket.resolvedAt),
     closedAt: iso(ticket.closedAt),
+    allowedTransitions: allowedTransitions(
+      ticket.status,
+      user.role,
+      transitionContext(ticket, user, now),
+    ),
   };
 }
