@@ -45,6 +45,11 @@ export interface TicketDetail extends TicketSummary {
   firstResponseAt: string | null;
   resolvedAt: string | null;
   closedAt: string | null;
+  /**
+   * Transições que este usuário pode fazer agora, calculadas pela API. Pode estar
+   * defasada: a rota ainda recusa com 403 ou 409, e aí o front recarrega o ticket.
+   */
+  allowedTransitions: TicketStatus[];
 }
 
 /** Para o cliente, a API nunca devolve comentários com `isInternal: true`. */

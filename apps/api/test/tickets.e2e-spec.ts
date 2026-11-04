@@ -93,6 +93,7 @@ describe.skipIf(!TEST_DATABASE_URL)('tickets (e2e)', () => {
         firstResponseAt: null,
         resolvedAt: null,
         closedAt: null,
+        allowedTransitions: [],
       });
       const stored = await prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
       const createdAt = stored.createdAt.getTime();
@@ -285,6 +286,42 @@ describe.skipIf(!TEST_DATABASE_URL)('tickets (e2e)', () => {
         status: 'RESOLVED',
         resolvedAt: new Date(Date.now() - 8 * DAY),
       });
+      await transition(customer, ticket.id, 'IN_PROGRESS').expect(409);
+    });
+
+    it('allowedTransitions vem em toda resposta de detalhe, para quem pede', async () => {
+      const ticket = await openTicket(customer);
+      expect(ticket.allowedTransitions).toEqual([]);
+      await setTicket(ticket.id, { assignee: { connect: { id: agent.id } } });
+
+      const get = (by: Actor) => as(by).get(`/api/tickets/${ticket.id}`).expect(200);
+      expect((await get(agent)).body.allowedTransitions).toEqual(['IN_PROGRESS']);
+      expect((await get(otherAgent)).body.allowedTransitions).toEqual([]);
+
+      const patched = await as(agent)
+        .patch(`/api/tickets/${ticket.id}`)
+        .send({ priority: 'HIGH' })
+        .expect(200);
+      expect(patched.body.allowedTransitions).toEqual(['IN_PROGRESS']);
+
+      const moved = await transition(agent, ticket.id, 'IN_PROGRESS').expect(200);
+      expect(moved.body.allowedTransitions).toEqual(['WAITING_CUSTOMER', 'RESOLVED']);
+    });
+
+    it('allowedTransitions concorda com a rota: o listado passa, o resto é recusado', async () => {
+      const ticket = await openTicket(customer);
+      await setTicket(ticket.id, { status: 'IN_PROGRESS' });
+
+      const before = await as(customer).get(`/api/tickets/${ticket.id}`).expect(200);
+      expect(before.body.allowedTransitions).toEqual(['RESOLVED']);
+      await transition(customer, ticket.id, 'WAITING_CUSTOMER').expect(403);
+
+      const resolved = await transition(customer, ticket.id, 'RESOLVED').expect(200);
+      expect(resolved.body.allowedTransitions).toEqual(['IN_PROGRESS']);
+
+      await setTicket(ticket.id, { resolvedAt: new Date(Date.now() - 8 * DAY) });
+      const expired = await as(customer).get(`/api/tickets/${ticket.id}`).expect(200);
+      expect(expired.body.allowedTransitions).toEqual([]);
       await transition(customer, ticket.id, 'IN_PROGRESS').expect(409);
     });
 

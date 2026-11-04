@@ -167,16 +167,18 @@ describe.skipIf(!TEST_DATABASE_URL)('atribuição (e2e)', () => {
     });
 
     it(
-      'sem o lock em 2 s, a criação recebe 503 e não grava nada',
+      'sem o lock em 2 s, a criação recebe 503 com Retry-After e não grava nada',
       { timeout: 15_000 },
       async () => {
         await agentNamed('agente');
 
         await withLockHeld(async () => {
-          await as(customer)
+          const res = await as(customer)
             .post('/api/tickets')
             .send({ title: 'Na fila', description: 'Esperando o lock.' })
             .expect(503);
+          expect(res.headers['retry-after']).toBe('1');
+          expect(res.body.message).toBe('O sistema está ocupado. Tente de novo em instantes.');
         });
         expect(await prisma.ticket.count()).toBe(0);
       },

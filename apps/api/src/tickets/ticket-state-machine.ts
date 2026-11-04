@@ -1,4 +1,4 @@
-import type { Role, TicketStatus } from '@support-flow/shared';
+import { TicketStatus, type Role } from '@support-flow/shared';
 
 // Regras do ciclo de vida do ticket, sem banco: quem aplica é o TicketsService,
 // sempre por um update condicional ao status lido.
@@ -59,6 +59,29 @@ export function canTransition(
     return { ok: false, reason: 'REOPEN_WINDOW_EXPIRED' };
   }
   return { ok: true };
+}
+
+/** O vínculo de quem pede com o ticket. A checagem e os botões do front leem daqui. */
+export function transitionContext(
+  ticket: { requesterId: string; assigneeId: string | null; resolvedAt: Date | null },
+  user: { id: string },
+  now: Date,
+): TransitionContext {
+  return {
+    isRequester: ticket.requesterId === user.id,
+    isAssignee: ticket.assigneeId === user.id,
+    resolvedAt: ticket.resolvedAt,
+    now,
+  };
+}
+
+/** O que `canTransition` aceitaria agora. `Role`, não `Actor`: SYSTEM nunca chega ao front. */
+export function allowedTransitions(
+  from: TicketStatus,
+  actor: Role,
+  ctx: TransitionContext,
+): TicketStatus[] {
+  return Object.values(TicketStatus).filter((to) => canTransition(from, to, actor, ctx).ok);
 }
 
 function isReopenWindowExpired({ resolvedAt, now }: TransitionContext): boolean {

@@ -1,7 +1,8 @@
-import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { OPEN_STATUSES } from '@support-flow/shared';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { AssignmentBusyException } from './assignment-busy.js';
 import { pickAgent, type AgentLoad } from './pick-agent.js';
 
 // Atribuição automática por menor carga. Este módulo não importa tickets/ nem
@@ -78,9 +79,7 @@ export class AssignmentService {
         // Quase sempre é o lock_timeout; uma queda do banco também cai aqui,
         // então o erro original fica no log.
         this.logger.warn(`Lock da atribuição indisponível: ${String(error)}`);
-        throw new ServiceUnavailableException(
-          'O sistema está ocupado. Tente de novo em instantes.',
-        );
+        throw new AssignmentBusyException();
       }
       return fn(tx as LockedTx);
     }, LOCKED_TX_OPTIONS);
