@@ -179,6 +179,7 @@ describe.skipIf(!TEST_DATABASE_URL)('atribuição (e2e)', () => {
             .expect(503);
           expect(res.headers['retry-after']).toBe('1');
           expect(res.body.message).toBe('O sistema está ocupado. Tente de novo em instantes.');
+          expect(res.body.code).toBe('ASSIGNMENT_BUSY');
         });
         expect(await prisma.ticket.count()).toBe(0);
       },

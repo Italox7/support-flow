@@ -2,6 +2,38 @@
 
 Registro curto das decisões que não são óbvias pelo código. A mais recente fica no topo.
 
+## 2026-11-04 — Sessão no front e repetição automática (Fase 6)
+
+Desenho revisado pelo Gard e pela Pixie antes do código.
+
+- **`code: 'ASSIGNMENT_BUSY'` no corpo do 503 de `inLock`** (acréscimo ao contrato), usado na
+  criação, no PATCH do ticket e na disponibilidade. O código significa "nada gravado", não só
+  "lock ocupado": uma queda do banco ao tomar o lock sai com ele também. Só esse 503 garante isso. Um 503 de proxy pode vir depois de a API gravar e, como
+  `POST /tickets` não tem chave de idempotência, repetir criaria um ticket duplicado. O front
+  repete só com status 503, `Retry-After` inteiro de 1 a 5 e esse `code`, em até 3 tentativas
+  no total. O 429 nunca repete.
+- **Cada aba renova o próprio access token, em fila num Web Lock.** A rotação só revoga a
+  família quando o token apresentado já foi revogado; em fila, cada aba manda o cookie que a
+  anterior deixou. O BroadcastChannel leva só avisos, nunca o token, que fica só em memória.
+- **Login, cadastro e logout usam o mesmo lock**, porque escrevem o mesmo cookie: sem isso, um
+  refresh atrasado ressuscitaria a sessão depois do logout ou sobrescreveria o login de outra
+  pessoa.
+- **O fetch do refresh não é abortado cedo.** Abortar depois de o servidor rotacionar perde o
+  token novo. O timeout curto (10 s) vale para a espera do lock; o do fetch é só um teto alto.
+- **Só o 401 do refresh encerra a sessão.** 429, 5xx e erro de rede são transitórios: a sessão
+  fica, e o usuário tenta de novo.
+- **Troca entre o teto de 60 s e a sessão**: a leitura desiste em 60 s e mostra "Tentar de novo",
+  mas login, cadastro e refresh têm teto de 120 s, para não perder um token já rotacionado. Com
+  o servidor muito lento, a tela de abertura pode esperar mais que o minuto que o texto promete.
+  A espera de 10 s pelo lock também é menor que o cold start: uma segunda aba pode mostrar erro
+  com "Tentar de novo" enquanto a primeira acorda a API. Nos dois casos a sessão é preservada.
+- **Riscos aceitos para a demo**: se a resposta de um refresh se perder depois da rotação, a
+  renovação seguinte revoga a família e o usuário entra de novo (só uma janela de tolerância na
+  API eliminaria isso). Sem Web Locks, a fila vale só dentro da aba, e abas renovando juntas
+  têm a mesma consequência. Nos dois casos nada vaza.
+- **Rascunho de comentário em `sessionStorage`**, com chave por usuário e ticket, para
+  sobreviver à sessão expirada; o logout explícito apaga os rascunhos.
+
 ## 2026-11-03 — Criar agente e contrato para o front (antes da Fase 6)
 
 Desenho revisado pelo Archie antes do código.
@@ -23,7 +55,8 @@ Desenho revisado pelo Archie antes do código.
   o limite do admin, sem pagar argon2. Impacto baixo; com `TRUST_PROXY` errado, todos dividem o
   IP. A exigência dele em produção é da Fase 7, e o `env.ts` ainda não a impõe.
 - **`Retry-After: 1` só no 503 do lock**, por uma subclasse (`AssignmentBusyException`) e um
-  filtro que escreve o cabeçalho e mantém o corpo. O front só repete sozinho com status 503
+  filtro que escreve o cabeçalho e mantém o corpo. (Regra do front substituída pela entrada de
+  2026-11-04, que exige também o `code`.) O front só repete sozinho com status 503
   **e** esse cabeçalho, com um número limitado de tentativas: o throttler também manda
   `Retry-After` no 429, e uma queda do banco cai no mesmo 503. É seguro porque o lock é a
   primeira instrução da transação. Falta conferir no staging se o rewrite da Vercel preserva o
