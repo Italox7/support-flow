@@ -44,7 +44,7 @@ describe('503 do lock da atribuição', () => {
     await app?.close();
   });
 
-  it('traz Retry-After e mantém o corpo padrão do Nest', async () => {
+  it('traz Retry-After e o corpo padrão do Nest com o code', async () => {
     const res = await request(app.getHttpServer()).get('/api/teste/ocupado').expect(503);
 
     expect(res.headers['retry-after']).toBe('1');
@@ -52,6 +52,7 @@ describe('503 do lock da atribuição', () => {
       statusCode: 503,
       message: 'O sistema está ocupado. Tente de novo em instantes.',
       error: 'Service Unavailable',
+      code: 'ASSIGNMENT_BUSY',
     });
   });
 

@@ -1,0 +1,51 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-brand: #1d4ed8;
+  --color-brand-strong: #1e40af;
+  --color-focus: #1d4ed8;
+  --color-ink: #111827;
+  --color-muted: #4b5563;
+  --color-line: #6b7280;
+  --color-surface: #ffffff;
+  --color-canvas: #f3f4f6;
+  --color-danger: #991b1b;
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    background: var(--color-canvas);
+    color: var(--color-ink);
+  }
+
+  :focus-visible {
+    outline: 3px solid var(--color-focus);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-md border border-line bg-surface px-4 py-2 font-medium text-ink hover:bg-canvas disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .btn-primary {
+    @apply border-brand bg-brand text-white hover:bg-brand-strong;
+  }
+
+  .input {
+    @apply min-h-11 w-full rounded-md border border-line bg-surface px-3 py-2 text-ink aria-invalid:border-danger disabled:bg-canvas disabled:text-muted;
+  }
+
+  .card {
+    @apply rounded-lg border border-gray-300 bg-surface p-4;
+  }
+
+  .link {
+    @apply font-medium text-brand underline hover:text-brand-strong;
+  }
+}

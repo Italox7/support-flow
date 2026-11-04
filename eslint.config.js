@@ -56,6 +56,14 @@ export default defineConfig(
     rules: {
       ...reactHooks.configs.recommended.rules,
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+      // Conteúdo de ticket é escrito por usuários: só entra na tela como texto do React.
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "JSXAttribute[name.name='dangerouslySetInnerHTML']",
+          message: 'Nada de HTML cru: renderize como texto.',
+        },
+      ],
     },
   },
   prettier,
