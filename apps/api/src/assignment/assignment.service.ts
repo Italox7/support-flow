@@ -66,23 +66,38 @@ export class AssignmentService {
    * Abre uma transação cuja primeira instrução é o lock: duas criações
    * simultâneas não leem a mesma carga, e ninguém segura lock de linha
    * enquanto espera na fila. É liberado no commit ou no rollback.
+   *
+   * O 503 promete "nada gravado", então só sai enquanto isso é verdade: sem
+   * conexão, antes do callback, ou ao tomar o lock. O erro P2028 não serve de
+   * critério: também cobre a transação que expirou ou fechou depois de começar.
    */
-  inLock<T>(fn: (tx: LockedTx) => Promise<T>): Promise<T> {
-    return this.prisma.$transaction(async (tx) => {
-      // `true`: vale só para esta transação, inclusive atrás do pooler. Vale
-      // também para os locks de linha dentro de `fn`: uma espera de mais de 2 s
-      // ali (rara, contra uma transição) sobe como erro 500, não 503.
-      await tx.$executeRaw`SELECT set_config('lock_timeout', ${LOCK_TIMEOUT}, true)`;
-      try {
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${ASSIGNMENT_LOCK_KEY}::bigint)`;
-      } catch (error) {
-        // Quase sempre é o lock_timeout; uma queda do banco também cai aqui,
-        // então o erro original fica no log.
-        this.logger.warn(`Lock da atribuição indisponível: ${String(error)}`);
-        throw new AssignmentBusyException();
-      }
-      return fn(tx as LockedTx);
-    }, LOCKED_TX_OPTIONS);
+  async inLock<T>(fn: (tx: LockedTx) => Promise<T>): Promise<T> {
+    let started = false;
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        started = true;
+        try {
+          // `true`: vale só para esta transação, inclusive atrás do pooler. Vale
+          // também para os locks de linha dentro de `fn`: uma espera de mais de 2 s
+          // ali (rara, contra uma transição) sobe como erro 500, não 503.
+          await tx.$executeRaw`SELECT set_config('lock_timeout', ${LOCK_TIMEOUT}, true)`;
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(${ASSIGNMENT_LOCK_KEY}::bigint)`;
+        } catch (error) {
+          // Quase sempre é o lock_timeout; uma queda do banco também cai aqui,
+          // então o erro original fica no log.
+          throw this.busy(error);
+        }
+        return fn(tx as LockedTx);
+      }, LOCKED_TX_OPTIONS);
+    } catch (error) {
+      if (started) throw error;
+      throw this.busy(error);
+    }
+  }
+
+  private busy(cause: unknown): AssignmentBusyException {
+    this.logger.warn(`Lock da atribuição indisponível: ${String(cause)}`);
+    return new AssignmentBusyException();
   }
 
   /** Agentes com a carga atual. A leitura sozinha não precisa do lock. */

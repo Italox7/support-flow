@@ -6,7 +6,8 @@ import type { Role } from '@support-flow/shared';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
 import type { AccessTokenPayload } from '../src/auth/auth.types.js';
-import { ENV, loadEnv } from '../src/config/env.js';
+import { GlobalRegisterLimitGuard, UserRateLimitGuard } from '../src/auth/rate-limit.guards.js';
+import { ENV, loadEnv, type Env } from '../src/config/env.js';
 import type { Prisma } from '../src/generated/prisma/client.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
 import { SLA_RUNNING_STATUSES } from '../src/sla/sla-calculator.js';
@@ -42,17 +43,33 @@ const env = loadEnv({
   JWT_ACCESS_SECRET: 'e2e-'.padEnd(48, 'x'),
 });
 
-export async function createApp(options: { throttle: boolean }): Promise<NestExpressApplication> {
+/** Valores já validados: `RENDER=true` não passaria nas regras de deploy com URL local. */
+export type EnvOverrides = Partial<Env>;
+
+/** `rateLimitGuards` liga os limites de @UseGuards; por padrão, segue `throttle`. */
+export async function createApp(options: {
+  throttle: boolean;
+  rateLimitGuards?: boolean;
+  env?: EnvOverrides;
+}): Promise<NestExpressApplication> {
+  const appEnv = { ...env, ...options.env };
   let builder = Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(ENV)
-    .useValue(env);
+    .useValue(appEnv);
+  if (!(options.rateLimitGuards ?? options.throttle)) {
+    builder = builder
+      .overrideGuard(UserRateLimitGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(GlobalRegisterLimitGuard)
+      .useValue({ canActivate: () => true });
+  }
   if (!options.throttle) {
     // overrideProvider, não overrideGuard: o ThrottlerGuard global é um provider
     // (APP_GUARD com useExisting), e overrideGuard só troca os de @UseGuards.
     builder = builder.overrideProvider(ThrottlerGuard).useValue({ canActivate: () => true });
   }
   const app = (await builder.compile()).createNestApplication<NestExpressApplication>();
-  configureApp(app, env);
+  configureApp(app, appEnv);
   await app.init();
   return app;
 }

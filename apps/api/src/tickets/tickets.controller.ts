@@ -8,10 +8,12 @@ import {
   Patch,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import type { Paginated, TicketDetail, TicketSummary } from '@support-flow/shared';
 import { CurrentUser } from '../auth/auth.decorators.js';
 import type { RequestUser } from '../auth/auth.types.js';
+import { UserRateLimitGuard } from '../auth/rate-limit.guards.js';
 import {
   CreateTicketDto,
   ListTicketsQuery,
@@ -36,6 +38,7 @@ export class TicketsController {
   }
 
   @Post()
+  @UseGuards(UserRateLimitGuard)
   create(@CurrentUser() user: RequestUser, @Body() dto: CreateTicketDto): Promise<TicketDetail> {
     return this.tickets.create(user, dto);
   }
@@ -49,6 +52,7 @@ export class TicketsController {
   }
 
   @Patch(':id')
+  @UseGuards(UserRateLimitGuard)
   update(
     @CurrentUser() user: RequestUser,
     @Param('id', ParseUUIDPipe) id: string,

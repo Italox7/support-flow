@@ -2,6 +2,46 @@
 
 Registro curto das decisões que não são óbvias pelo código. A mais recente fica no topo.
 
+## 2026-11-04 — Deploy da demo pública (Fase 7)
+
+Desenho revisado por Pipe, Archie e Gard antes do código. Passo a passo em
+[runbook-deploy.md](runbook-deploy.md).
+
+- **Job único e diário**, `POST /api/jobs/run`, nesta ordem: restaurar a demo, fechar os tickets
+  resolvidos há mais de 7 dias (`REOPEN_WINDOW_MS`) e atribuir órfãos. Sem snapshot: os dados da
+  demo são descartáveis. Fechar fica fora do lock, como toda transição; só a restauração e a
+  atribuição o usam. Corpo: `{restored, closed, assigned}`, também no log.
+- **Três travas na restauração**: `DEMO_RESET_ENABLED`, `RENDER=true` e o schema `public` lido da
+  URL crua, porque `parseDatabaseUrl` trata schema ausente como public e `RENDER=true` não prova
+  que é a demo. Só usa a API de modelos, sem SQL cru, o que a prende ao schema do adapter.
+- **TLS diferente nas duas URLs**: `DATABASE_URL` em `verify-full` com a CA pública versionada;
+  `DIRECT_URL` em `require`, porque o schema engine do Prisma não suporta `verify-full`. A CLI
+  autentica sem verificar o servidor; só roda no build do Render, que fica na região do banco. Em
+  deploy, `env.ts` aceita só os parâmetros previstos, o que barra `uselibpqcompat` e `host`, e
+  `check-deploy-env` valida antes do migrate.
+- **Limites**: 10/min por usuário e por rota em `POST /tickets`, `POST` de comentários e nas rotas que
+  entram no lock ou pagam argon2 (`PATCH /tickets/:id`, criar agente, disponibilidade); teto de
+  30/min somando todas; teto de 30 cadastros por hora, independente de IP. A contagem fica em memória
+  e zera no cold start: basta para uma instância.
+- **X-Forwarded-For forjado aceito na demo**, sem segredo de origem (Gard), porque os limites acima
+  não dependem de IP; o login ainda depende (pendência da Fase 2 sobre os hashes simultâneos). **Admin com senha pública é aceitável**: o dano se desfaz em até 24 h ou por
+  `workflow_dispatch`. `DEMO_PASSWORD` e `JWT_ACCESS_SECRET` são exclusivos da demo.
+- **`inLock` responde 503 só enquanto nada foi gravado**: sem conexão, antes do callback, ou ao
+  tomar o lock. Depois de começar, o erro sobe como está. P2028 não serve de critério (Archie),
+  porque também cobre a transação expirada ou já fechada, e essa pode ter gravado.
+- **`/api/health/live` para o Render**, sem banco e sem rate limit; `/api/health` para o cron. Pool
+  de 5 conexões, com 4 s de espera.
+- **Riscos conhecidos**:
+  - o access token de um usuário apagado pela restauração vale até 15 min, e `POST /tickets` com
+    ele tende a 500 por chave estrangeira. As contas da demo têm IDs fixos e não passam por isso;
+  - o advisory lock é por banco: os schemas `dev` e `public` dividem a mesma fila;
+  - uma migration à frente do código pede expandir e contrair, e o runbook explica como;
+  - **indisponibilidade por abuso (risco aceito)**: com as três contas públicas, uma pessoa sustenta
+    o teto de escrita, e qualquer um esgota os cadastros da hora com pedidos inválidos, porque o teto
+    conta antes da validação. Só as escritas e os cadastros param; as contas da demo continuam
+    entrando. Reavaliar só se houver abuso real nos logs, começando por captcha no cadastro ou por
+    teto por IP depois de medir o `TRUST_PROXY`.
+
 ## 2026-11-04 — Sessão no front e repetição automática (Fase 6)
 
 Desenho revisado pelo Gard e pela Pixie antes do código.
@@ -173,7 +213,8 @@ Desenho revisado pelo Archie antes do código.
   - limite por usuário no `POST /tickets` **bloqueia o deploy** (P1 a partir dele: o
     cadastro é aberto e cada criação entra na fila do lock). O PATCH do ticket já checa
     escopo e papel antes da fila: cliente e agente sem permissão não a ocupam;
-  - esperar mais que o `maxWait` por uma conexão do pool vira 500, não 503;
+  - ~~esperar mais que o `maxWait` por uma conexão do pool vira 500, não 503~~ (resolvido na
+    entrada de deploy: sem conexão antes da transação começar, `inLock` responde 503);
   - rebaixar um agente (quando houver troca de papel) tem de reatribuir os tickets dele e
     revogar os refresh tokens;
   - `isAvailable` nasce `true` em todo usuário; o filtro `role: AGENT` está em toda consulta

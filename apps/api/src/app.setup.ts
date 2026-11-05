@@ -1,6 +1,7 @@
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
+import type { NextFunction, Request, Response } from 'express';
 import { AssignmentBusyFilter } from './assignment/assignment-busy.js';
 import type { Env } from './config/env.js';
 
@@ -8,10 +9,21 @@ import type { Env } from './config/env.js';
 export function configureApp(app: NestExpressApplication, env: Env): void {
   app.disable('x-powered-by');
   if (env.TRUST_PROXY > 0) app.set('trust proxy', env.TRUST_PROXY);
+  if (env.LOG_XFF_COUNT) app.use(logForwardedForCount);
   app.setGlobalPrefix('api');
   app.use(cookieParser());
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
   );
   app.useGlobalFilters(new AssignmentBusyFilter());
+}
+
+const xffLogger = new Logger('TrustProxy');
+
+/** Mede o TRUST_PROXY no deploy: registra só a contagem, nunca os IPs. */
+function logForwardedForCount(req: Request, _res: Response, next: NextFunction): void {
+  const forwarded = req.headers['x-forwarded-for'];
+  const value = Array.isArray(forwarded) ? forwarded.join(',') : forwarded;
+  xffLogger.log(`X-Forwarded-For com ${value ? value.split(',').length : 0} entrada(s)`);
+  next();
 }

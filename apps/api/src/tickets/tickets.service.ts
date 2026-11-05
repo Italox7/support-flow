@@ -46,6 +46,9 @@ const ticketInclude = {
 type TicketWithPeople = Prisma.TicketGetPayload<{ include: typeof ticketInclude }>;
 type Db = Prisma.TransactionClient;
 
+/** Tickets fechados por execução do job. O que passar disso espera a próxima. */
+const CLOSE_BATCH_SIZE = 200;
+
 export const isStaff = (user: RequestUser) => user.role !== 'CUSTOMER';
 
 /**
@@ -239,6 +242,26 @@ export class TicketsService {
       data: { status: to, ...transitionPatch(ticket.status, to, now), ...sla.data },
     });
     return count === 1;
+  }
+
+  /**
+   * Fecha os tickets resolvidos antes de `cutoff` e retorna quantos fechou. Fora
+   * do lock da atribuição: como toda transição, vale pelo update condicional, e
+   * um ticket que mudou de status no meio tempo faz `applyTransition` devolver `false`.
+   */
+  async closeResolvedBefore(cutoff: Date, now: Date): Promise<number> {
+    const tickets = await this.prisma.ticket.findMany({
+      where: { status: 'RESOLVED', resolvedAt: { lt: cutoff } },
+      orderBy: [{ resolvedAt: 'asc' }, { id: 'asc' }],
+      take: CLOSE_BATCH_SIZE,
+    });
+    let closed = 0;
+    for (const ticket of tickets) {
+      const ctx = { isRequester: false, isAssignee: false, resolvedAt: ticket.resolvedAt, now };
+      if (!canTransition(ticket.status, 'CLOSED', 'SYSTEM', ctx).ok) continue;
+      if (await this.applyTransition(this.prisma, ticket, 'CLOSED', now)) closed += 1;
+    }
+    return closed;
   }
 
   /** Chamado na mesma transação que grava o comentário. */

@@ -1,8 +1,18 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { AgentSummary, Availability } from '@support-flow/shared';
 import { CurrentUser, Roles } from '../auth/auth.decorators.js';
 import type { RequestUser } from '../auth/auth.types.js';
+import { UserRateLimitGuard } from '../auth/rate-limit.guards.js';
 import { AvailabilityDto, CreateAgentDto } from './users.dto.js';
 import { UsersService } from './users.service.js';
 
@@ -27,6 +37,7 @@ export class UsersController {
   @Post('agents')
   @Roles('ADMIN')
   @Throttle(CREATE_AGENT_THROTTLE)
+  @UseGuards(UserRateLimitGuard)
   createAgent(
     @CurrentUser() admin: RequestUser,
     @Body() dto: CreateAgentDto,
@@ -43,6 +54,7 @@ export class UsersController {
   @Patch('me/availability')
   @Roles('AGENT')
   @Throttle(AVAILABILITY_THROTTLE)
+  @UseGuards(UserRateLimitGuard)
   setMyAvailability(
     @CurrentUser() user: RequestUser,
     @Body() dto: AvailabilityDto,
@@ -53,6 +65,7 @@ export class UsersController {
   @Patch(':id/availability')
   @Roles('ADMIN')
   @Throttle(AVAILABILITY_THROTTLE)
+  @UseGuards(UserRateLimitGuard)
   setAvailability(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AvailabilityDto,

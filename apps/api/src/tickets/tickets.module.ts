@@ -9,5 +9,6 @@ import { TicketsService } from './tickets.service.js';
   imports: [AssignmentModule],
   controllers: [TicketsController, CommentsController],
   providers: [TicketsService, CommentsService],
+  exports: [TicketsService],
 })
 export class TicketsModule {}
