@@ -1,0 +1,62 @@
+name: Jobs diários
+
+# Restaura a demo, fecha os tickets resolvidos há mais de 7 dias e atribui os órfãos.
+# O GitHub desliga agendamentos após 60 dias sem atividade no repositório: ver o
+# lembrete mensal em docs/runbook-deploy.md.
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jobs
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Sem checkout e sem action de terceiros: este job só precisa do curl, e é o
+    # único que recebe o segredo.
+    steps:
+      - name: Esperar a API e o banco
+        shell: bash
+        env:
+          API_URL: ${{ secrets.API_URL }}
+        run: |
+          if [ -z "$API_URL" ]; then
+            echo "O secret API_URL não está definido."
+            exit 1
+          fi
+          deadline=$((SECONDS + 180))
+          until curl --proto '=https' --silent --max-time 30 "$API_URL/api/health" | grep -q '"status":"ok"'; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "A API não ficou pronta em 3 minutos."
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Rodar os jobs
+        shell: bash
+        env:
+          API_URL: ${{ secrets.API_URL }}
+          JOBS_SECRET: ${{ secrets.JOBS_SECRET }}
+        run: |
+          body="$RUNNER_TEMP/jobs-response.json"
+          # O printf é embutido no shell: o segredo não aparece nos argumentos de nenhum processo.
+          status=$(printf 'x-job-secret: %s\n' "$JOBS_SECRET" | curl --proto '=https' --silent --show-error \
+            --max-time 120 --request POST --header @- --output "$body" --write-out '%{http_code}' \
+            "$API_URL/api/jobs/run")
+          if [ "$status" != "200" ]; then
+            echo "A API respondeu $status."
+            exit 1
+          fi
+          cat "$body"
+          # Este workflow só existe para a demo: sem restaurar, a trava foi desligada por engano.
+          jq --exit-status '.restored == true and (.closed | type == "number") and (.assigned | type == "number")' "$body"

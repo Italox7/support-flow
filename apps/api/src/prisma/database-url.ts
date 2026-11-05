@@ -14,3 +14,13 @@ export function parseDatabaseUrl(databaseUrl: string): PgConnection {
   url.searchParams.delete('schema');
   return { connectionString: url.toString(), schema };
 }
+
+/** O valor do parâmetro, ou `null` se estiver ausente, vazio ou duplicado. Nunca assume padrão. */
+export function singleParam(url: URL, name: string): string | null {
+  const values = url.searchParams.getAll(name);
+  return values.length === 1 && values[0] ? values[0] : null;
+}
+
+export function hasOnlyParams(url: URL, allowed: readonly string[]): boolean {
+  return [...url.searchParams.keys()].every((name) => allowed.includes(name));
+}

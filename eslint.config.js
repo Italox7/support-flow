@@ -23,8 +23,9 @@ export default defineConfig(
         {
           patterns: [
             {
-              group: ['**/tickets/**', '**/users/**'],
-              message: 'assignment/ não importa tickets/ nem users/: eles é que dependem dele.',
+              group: ['**/tickets/**', '**/users/**', '**/jobs/**'],
+              message:
+                'assignment/ não importa tickets/, users/ nem jobs/: eles é que dependem dele.',
             },
           ],
         },
@@ -40,9 +41,30 @@ export default defineConfig(
         {
           patterns: [
             {
-              group: ['**/tickets/**', '**/assignment/**', '**/users/**'],
+              group: ['**/tickets/**', '**/assignment/**', '**/users/**', '**/jobs/**'],
               message:
-                'sla/ não importa tickets/, assignment/ nem users/: eles é que dependem dele.',
+                'sla/ não importa tickets/, assignment/, users/ nem jobs/: eles é que dependem dele.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // jobs/ fica no topo: orquestra os outros módulos, e nenhum deles depende dele.
+    files: [
+      'apps/api/src/tickets/**/*.ts',
+      'apps/api/src/users/**/*.ts',
+      'apps/api/src/auth/**/*.ts',
+    ],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/jobs/**'],
+              message: 'jobs/ depende de tickets/, users/ e auth/, nunca o contrário.',
             },
           ],
         },

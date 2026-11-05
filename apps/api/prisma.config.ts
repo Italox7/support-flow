@@ -1,7 +1,8 @@
 import 'dotenv/config';
 import { defineConfig } from 'prisma/config';
 
-// A CLI (migrate, studio) usa a conexão direta: migrations não passam pelo pooler.
+// A CLI (migrate, studio) usa o session pooler (porta 5432), que tem IPv4 e aceita
+// o que as migrations precisam; a aplicação usa o transaction pooler (6543).
 // `prisma generate` não precisa de banco, então a URL é opcional aqui; o CI gera o
 // client sem nenhuma variável definida.
 export default defineConfig({

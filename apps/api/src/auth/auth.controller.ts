@@ -7,6 +7,7 @@ import {
   Req,
   Res,
   UnauthorizedException,
+  UseGuards,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { AuthResponse, AuthUser } from '@support-flow/shared';
@@ -15,6 +16,7 @@ import { CurrentUser, Public } from './auth.decorators.js';
 import { LoginDto, RegisterDto } from './auth.dto.js';
 import { AuthService, type Session } from './auth.service.js';
 import type { RequestUser } from './auth.types.js';
+import { GlobalRegisterLimitGuard } from './rate-limit.guards.js';
 import { clearRefreshCookie, readRefreshCookie, setRefreshCookie } from './refresh-token.js';
 
 /** /auth fica abaixo do limite global (ThrottlerGuard global, em AuthModule). */
@@ -29,6 +31,7 @@ export class AuthController {
 
   @Public()
   @Throttle(CREDENTIALS_THROTTLE)
+  @UseGuards(GlobalRegisterLimitGuard)
   @Post('register')
   async register(
     @Body() dto: RegisterDto,

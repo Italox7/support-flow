@@ -8,7 +8,10 @@ import { parseDatabaseUrl } from './database-url.js';
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   constructor(@Inject(ENV) env: Pick<Env, 'DATABASE_URL'>) {
     const { connectionString, schema } = parseDatabaseUrl(env.DATABASE_URL);
-    super({ adapter: new PrismaPg({ connectionString }, { schema }) });
+    // Pool pequeno: o plano gratuito do pooler e os 512 MB do Render são o limite.
+    // Sem conexão em 4 s, o erro chega antes do `maxWait` das transações.
+    const pool = { connectionString, max: 5, connectionTimeoutMillis: 4_000 };
+    super({ adapter: new PrismaPg(pool, { schema }) });
   }
 
   async onModuleInit(): Promise<void> {

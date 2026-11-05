@@ -1,7 +1,8 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
 import type { CommentDto } from '@support-flow/shared';
 import { CurrentUser } from '../auth/auth.decorators.js';
 import type { RequestUser } from '../auth/auth.types.js';
+import { UserRateLimitGuard } from '../auth/rate-limit.guards.js';
 import { CommentsService } from './comments.service.js';
 import { CreateCommentDto } from './tickets.dto.js';
 
@@ -18,6 +19,7 @@ export class CommentsController {
   }
 
   @Post()
+  @UseGuards(UserRateLimitGuard)
   create(
     @CurrentUser() user: RequestUser,
     @Param('id', ParseUUIDPipe) ticketId: string,

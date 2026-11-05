@@ -71,3 +71,32 @@ jobs:
       - run: npm test
 
       - run: npm run build
+
+      - name: A guarda de deploy recusa o ambiente errado e aceita o certo
+        env:
+          JWT_ACCESS_SECRET: ci-smoke-secret-with-more-than-32-characters
+          JOBS_SECRET: ci-smoke-jobs-secret-with-more-than-32-chars
+          TRUST_PROXY: '1'
+        run: |
+          if node apps/api/dist/check-deploy-env.js; then
+            echo "A guarda aceitou uma URL sem sslmode."
+            exit 1
+          fi
+          DATABASE_URL='postgresql://u:p@pooler.example.com:6543/postgres?schema=public&sslmode=verify-full&sslrootcert=certs/supabase-ca.crt' \
+          DIRECT_URL='postgresql://u:p@pooler.example.com:5432/postgres?schema=public&sslmode=require' \
+            node apps/api/dist/check-deploy-env.js
+
+      - name: Subir o build e checar os dois health
+        working-directory: apps/api
+        env:
+          JWT_ACCESS_SECRET: ci-smoke-secret-with-more-than-32-characters
+        run: |
+          node dist/main.js &
+          api_pid=$!
+          trap 'kill "$api_pid"' EXIT
+          for _ in $(seq 1 30); do
+            curl --silent --fail http://localhost:3000/api/health/live >/dev/null && break
+            sleep 1
+          done
+          curl --silent --show-error --fail http://localhost:3000/api/health/live | grep -q '"status":"ok"'
+          curl --silent --show-error --fail http://localhost:3000/api/health | grep -q '"status":"ok"'

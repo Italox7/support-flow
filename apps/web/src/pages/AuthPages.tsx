@@ -147,6 +147,11 @@ export function RegisterPage() {
   return (
     <Page title="Criar conta">
       <div className="card max-w-md space-y-4">
+        <p>
+          Esta é uma demonstração pública. Não use dados nem senhas reais: invente um e-mail (não é
+          preciso confirmá-lo, por exemplo nome@example.com) e uma senha nova. Contas e tickets são
+          apagados todos os dias.
+        </p>
         <FormAlert message={formError} />
         <form ref={form} noValidate className="space-y-4" onSubmit={(e) => void submit(e)}>
           <TextField
