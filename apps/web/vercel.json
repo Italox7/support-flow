@@ -7,7 +7,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://troque-pelo-host-do-render.invalid/api/:path*"
+      "destination": "https://support-flow-api.onrender.com/api/:path*"
     },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
