@@ -10,12 +10,24 @@ export function configureApp(app: NestExpressApplication, env: Env): void {
   app.disable('x-powered-by');
   if (env.TRUST_PROXY > 0) app.set('trust proxy', env.TRUST_PROXY);
   if (env.LOG_XFF_COUNT) app.use(logForwardedForCount);
+  app.use(noStore);
   app.setGlobalPrefix('api');
   app.use(cookieParser());
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
   );
   app.useGlobalFilters(new AssignmentBusyFilter());
+}
+
+/**
+ * Toda resposta da API carrega dados de um usuário (ou o erro dele): nenhum cache,
+ * do navegador ou de proxy, pode guardá-la. Sem isto, valeria o Cache-Control
+ * padrão da Vercel no rewrite de /api. Vem antes das rotas, então cobre também
+ * 401, 404 e as respostas dos filtros de erro.
+ */
+export function noStore(_req: Request, res: Response, next: NextFunction): void {
+  res.setHeader('Cache-Control', 'no-store');
+  next();
 }
 
 const xffLogger = new Logger('TrustProxy');

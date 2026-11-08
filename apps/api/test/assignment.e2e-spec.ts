@@ -178,6 +178,7 @@ describe.skipIf(!TEST_DATABASE_URL)('atribuição (e2e)', () => {
             .send({ title: 'Na fila', description: 'Esperando o lock.' })
             .expect(503);
           expect(res.headers['retry-after']).toBe('1');
+          expect(res.headers['cache-control']).toBe('no-store');
           expect(res.body.message).toBe('O sistema está ocupado. Tente de novo em instantes.');
           expect(res.body.code).toBe('ASSIGNMENT_BUSY');
         });
