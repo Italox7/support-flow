@@ -75,6 +75,16 @@ describe.skipIf(!TEST_DATABASE_URL)('tickets (e2e)', () => {
     await http().post('/api/tickets').send({}).expect(401);
   });
 
+  it('nenhuma resposta da API pode ir para cache', async () => {
+    await openTicket(customer);
+    const list = await as(customer).get('/api/tickets').expect(200);
+    expect(list.headers['cache-control']).toBe('no-store');
+    const unauthorized = await http().get('/api/tickets').expect(401);
+    expect(unauthorized.headers['cache-control']).toBe('no-store');
+    const missing = await as(customer).get('/api/rota-que-nao-existe').expect(404);
+    expect(missing.headers['cache-control']).toBe('no-store');
+  });
+
   describe('POST /api/tickets', () => {
     it('sem agente disponível, abre em OPEN, sem responsável, com os prazos da MEDIUM', async () => {
       const ticket = await openTicket(customer);
@@ -482,6 +492,7 @@ describe.skipIf(!TEST_DATABASE_URL)('rate limit global (e2e)', () => {
   it('bloqueia a 121ª requisição no mesmo minuto, antes mesmo da autenticação', async () => {
     const attempt = () => request(app.getHttpServer()).get('/api/tickets');
     for (let i = 0; i < 120; i++) await attempt().expect(401);
-    await attempt().expect(429);
+    const blocked = await attempt().expect(429);
+    expect(blocked.headers['cache-control']).toBe('no-store');
   });
 });
