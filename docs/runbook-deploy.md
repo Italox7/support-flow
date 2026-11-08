@@ -66,10 +66,29 @@ A guarda `check-deploy-env` lista só os nomes das variáveis inválidas, nunca 
 | M5  | 5 logins simultâneos                                                    | Abaixo de 512 MB, sem reinício                                                             |
 | M6  | Cron com a API fria e com segredo errado                                | O primeiro passa; o segundo falha e chega e-mail; o `dev` fica idêntico                    |
 
+### Resultado do primeiro deploy (2026-11-08)
+
+| #        | Resultado                                                                                                                                 |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| M1       | 3 partidas a frio: 42,7 s, 42,6 s e 42,8 s, sempre JSON. O front mostra "Acordando o servidor…"                                           |
+| M2       | 6º login errado = 429; outra rede (4G) não foi afetada, o que confirma `TRUST_PROXY=4`; o XFF forjado escapou em 3 de 6                   |
+| M3       | 30 POST em 1,9 s: 10 × 201 e 20 × 429, todos com `Retry-After`; nenhum 500 ou 503; `live` no máximo em 1,35 s                             |
+| M4       | Sem cache (`MISS`, sem `age`); login com `no-store` e cookie `HttpOnly; Secure; SameSite=Lax`; corpos 401/429 intactos. 503 não provocado |
+| M5       | 5 logins simultâneos, todos 200 em 1,5 a 1,9 s, sem reinício. Memória **estimada** (o plano free não mostra)                              |
+| M6       | Cron a frio verde e `dev` idêntico antes e depois (contagem e md5 de 5 tabelas); segredo errado = 401                                     |
+| Rollback | Render ida e volta em 41 s cada; Vercel imediato; login e escrita funcionaram nos dois                                                    |
+| CSP      | Console sem violação em login, lista, ticket, comentário e saída                                                                          |
+
 ## Rollback
 
-- **API**: Render → Events → reverter para o deploy anterior.
-- **Front**: Vercel → Deployments → promover o anterior.
+- **API**: Render → Events → **Rollback** no deploy desejado (cerca de 40 s). O rollback **volta
+  também as variáveis de ambiente** daquele deploy (a caixa de confirmação lista a diferença; confira
+  antes, porque ele pode desfazer a troca de um segredo) e **desliga o Auto-Deploy**. Para voltar,
+  faça Rollback no deploy mais novo e religue Settings → Auto-Deploy → On Commit.
+- **Front**: Vercel → Deployments → **Instant Rollback** (imediato, sem novo build). No plano Hobby
+  só vai para o deploy de Production **imediatamente anterior**: não deixe um deploy quebrado nessa
+  posição. Para voltar, use **Promote** no deploy mais novo, o que também devolve aos próximos merges
+  a atribuição automática do domínio.
 - **Dados da demo**: rodar **Jobs diários** por `workflow_dispatch`. Qualquer dano feito com a senha
   pública se desfaz assim, ou sozinho em até 24 h.
 - **Migrations não voltam atrás**. Com a API antiga rodando, use expandir e depois contrair: primeiro

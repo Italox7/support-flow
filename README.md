@@ -5,9 +5,10 @@ automática por menor carga.
 
 **Stack:** React + TypeScript (Vite) · NestJS · Prisma · PostgreSQL (Supabase)
 
-> Os links da demo pública entram aqui depois do deploy. Contas de demonstração:
-> `admin@demo.example.com`, `agente@demo.example.com` e `cliente@demo.example.com`. A senha, pública,
-> também entra aqui nesse momento.
+**Demo:** https://support-flow-red.vercel.app · API: https://support-flow-api.onrender.com/api/health
+
+Contas de demonstração, todas com a senha pública `demo-suporte-2026`:
+`admin@demo.example.com`, `agente@demo.example.com` e `cliente@demo.example.com`.
 
 **A demo é pública.** Não use dados nem senhas reais: o e-mail não é confirmado, então invente um.
 Tudo é apagado e recriado uma vez por dia, e a numeração dos tickets não recomeça. Fora de uso, a demo pode ficar pausada: a API gratuita pode levar mais de

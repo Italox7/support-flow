@@ -2,6 +2,21 @@
 
 Registro curto das decisões que não são óbvias pelo código. A mais recente fica no topo.
 
+## 2026-11-08 — Primeiro deploy medido (Fase 7)
+
+Resultados em [runbook-deploy.md](runbook-deploy.md#resultado-do-primeiro-deploy-2026-11-08).
+
+- **`TRUST_PROXY=4`**: o pedido chega com 4 entradas no `X-Forwarded-For` (Vercel → Cloudflare →
+  Render); os health checks internos chegam com 0.
+- **XFF forjado escapa de forma intermitente** (3 de 6): o tamanho da cadeia parece variar na borda.
+  Continua dentro do risco aceito; reavaliar só se houver abuso.
+- **Cache-Control padrão da Vercel** (`public, max-age=0, must-revalidate`) nas respostas da API sem
+  cabeçalho próprio. Nenhum HIT observado; `no-store` global em `/api` fica como melhoria (P3).
+- **Memória do M5 estimada, não medida**: cerca de 95 MB de argon2 para 5 logins, mais o Node, contra
+  512 MB.
+- **Rollbacks não são neutros**: o do Render volta as variáveis e desliga o Auto-Deploy; o da Vercel,
+  no Hobby, só alcança o deploy anterior.
+
 ## 2026-11-04 — Deploy da demo pública (Fase 7)
 
 Desenho revisado por Pipe, Archie e Gard antes do código. Passo a passo em
