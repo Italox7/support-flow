@@ -233,12 +233,19 @@ export class TicketsService {
    * Único ponto que muda o status, e com ele a pausa e a retomada do SLA. O
    * update só vale se o status ainda for o que foi lido (de duas mudanças
    * simultâneas, uma passa e a outra recebe `false`) e, na retomada, se os
-   * prazos também forem: eles são regravados como valores absolutos.
+   * prazos também forem: eles são regravados como valores absolutos. `guard`
+   * acrescenta outros campos lidos de que a decisão dependeu.
    */
-  async applyTransition(tx: Db, ticket: Ticket, to: TicketStatus, now: Date): Promise<boolean> {
+  async applyTransition(
+    tx: Db,
+    ticket: Ticket,
+    to: TicketStatus,
+    now: Date,
+    guard: Prisma.TicketWhereInput = {},
+  ): Promise<boolean> {
     const sla = slaTransitionPatch(ticket.status, to, ticket, now);
     const { count } = await tx.ticket.updateMany({
-      where: { id: ticket.id, status: ticket.status, ...sla.guard },
+      where: { ...guard, id: ticket.id, status: ticket.status, ...sla.guard },
       data: { status: to, ...transitionPatch(ticket.status, to, now), ...sla.data },
     });
     return count === 1;
@@ -248,6 +255,9 @@ export class TicketsService {
    * Fecha os tickets resolvidos antes de `cutoff` e retorna quantos fechou. Fora
    * do lock da atribuição: como toda transição, vale pelo update condicional, e
    * um ticket que mudou de status no meio tempo faz `applyTransition` devolver `false`.
+   * O `resolvedAt` lido entra na guarda: um ticket reaberto e resolvido de novo
+   * entre a leitura e o update volta a RESOLVED com outra data, e fechá-lo
+   * pularia a janela de reabertura da resolução nova.
    */
   async closeResolvedBefore(cutoff: Date, now: Date): Promise<number> {
     const tickets = await this.prisma.ticket.findMany({
@@ -259,7 +269,8 @@ export class TicketsService {
     for (const ticket of tickets) {
       const ctx = { isRequester: false, isAssignee: false, resolvedAt: ticket.resolvedAt, now };
       if (!canTransition(ticket.status, 'CLOSED', 'SYSTEM', ctx).ok) continue;
-      if (await this.applyTransition(this.prisma, ticket, 'CLOSED', now)) closed += 1;
+      const guard = { resolvedAt: ticket.resolvedAt };
+      if (await this.applyTransition(this.prisma, ticket, 'CLOSED', now, guard)) closed += 1;
     }
     return closed;
   }

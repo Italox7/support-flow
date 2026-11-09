@@ -1,7 +1,7 @@
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { AssignmentService } from '../src/assignment/assignment.service.js';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ASSIGNMENT_LOCK_KEY, AssignmentService } from '../src/assignment/assignment.service.js';
 import { verifyPassword } from '../src/auth/password.js';
 import {
   DEFAULT_SLA_POLICIES,
@@ -13,6 +13,7 @@ import { DemoResetService } from '../src/jobs/demo-reset.service.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
 import { computeDeadlines } from '../src/sla/sla-deadlines.js';
 import { REOPEN_WINDOW_MS } from '../src/tickets/ticket-state-machine.js';
+import { TicketsService } from '../src/tickets/tickets.service.js';
 import {
   createActor,
   createApp,
@@ -39,22 +40,37 @@ describe.skipIf(!TEST_DATABASE_URL)('POST /api/jobs/run (e2e)', () => {
   const run = (target = app) =>
     request(target.getHttpServer()).post('/api/jobs/run').set('x-job-secret', SECRET);
 
-  async function makeTicket(
-    requester: Actor,
-    data: { status: 'OPEN' | 'RESOLVED' | 'CLOSED'; resolvedAt?: Date; assigneeId?: string },
-  ) {
+  type TicketFields = {
+    status: 'OPEN' | 'RESOLVED' | 'CLOSED';
+    resolvedAt?: Date;
+    assigneeId?: string;
+  };
+
+  function ticketData(requester: Actor, data: TicketFields) {
     const createdAt = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    return prisma.ticket.create({
-      data: {
-        title: 't',
-        description: 'd',
-        requesterId: requester.id,
-        createdAt,
-        ...computeDeadlines(createdAt, DEFAULT_SLA_POLICIES.MEDIUM),
-        ...data,
-        slaPausedAt: data.status === 'OPEN' ? null : (data.resolvedAt ?? createdAt),
+    return {
+      title: 't',
+      description: 'd',
+      requesterId: requester.id,
+      createdAt,
+      ...computeDeadlines(createdAt, DEFAULT_SLA_POLICIES.MEDIUM),
+      ...data,
+      slaPausedAt: data.status === 'OPEN' ? null : (data.resolvedAt ?? createdAt),
+    };
+  }
+
+  const makeTicket = (requester: Actor, data: TicketFields) =>
+    prisma.ticket.create({ data: ticketData(requester, data) });
+
+  /** Segura o lock da atribuição numa transação à parte enquanto `run` executa. */
+  async function withLockHeld(run: () => Promise<void>): Promise<void> {
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${ASSIGNMENT_LOCK_KEY}::bigint)`;
+        await run();
       },
-    });
+      { timeout: 10_000 },
+    );
   }
 
   describe('sem restauração', () => {
@@ -66,6 +82,9 @@ describe.skipIf(!TEST_DATABASE_URL)('POST /api/jobs/run (e2e)', () => {
       await app?.close();
     });
     beforeEach(() => resetDatabase(prisma));
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
 
     it('responde 401 com segredo errado ou ausente, sem fazer nada', async () => {
       const customer = await createActor(app, 'CUSTOMER', 'cliente');
@@ -111,6 +130,83 @@ describe.skipIf(!TEST_DATABASE_URL)('POST /api/jobs/run (e2e)', () => {
       const res = await run().expect(200);
       expect(res.body).toEqual({ restored: false, closed: 0, assigned: 0 });
     });
+
+    it('não fecha o ticket reaberto e resolvido de novo depois da leitura do job', async () => {
+      const customer = await createActor(app, 'CUSTOMER', 'cliente');
+      const expired = new Date(Date.now() - REOPEN_WINDOW_MS - 60_000);
+      const ticket = await makeTicket(customer, { status: 'RESOLVED', resolvedAt: expired });
+      const resolvedAgain = new Date();
+
+      // Entre o findMany e o update: uma reabertura que já tinha passado na checagem
+      // da janela grava, e a equipe resolve de novo. O status volta a ser RESOLVED.
+      const tickets = app.get(TicketsService);
+      const original = tickets.applyTransition.bind(tickets);
+      vi.spyOn(tickets, 'applyTransition').mockImplementationOnce(async (...args) => {
+        await prisma.ticket.update({
+          where: { id: ticket.id },
+          data: { resolvedAt: resolvedAgain, slaPausedAt: resolvedAgain },
+        });
+        return original(...args);
+      });
+
+      const res = await run().expect(200);
+      expect(res.body.closed).toBe(0);
+      const after = await prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+      expect(after).toMatchObject({
+        status: 'RESOLVED',
+        resolvedAt: resolvedAgain,
+        closedAt: null,
+      });
+    });
+
+    // ~200 updates em sequência: o timeout padrão de 5 s ficaria curto num CI lento.
+    it(
+      'fecha no máximo 200 por execução, dos resolvidos há mais tempo',
+      { timeout: 30_000 },
+      async () => {
+        const customer = await createActor(app, 'CUSTOMER', 'cliente');
+        const base = Date.now() - REOPEN_WINDOW_MS - 60 * 60 * 1000;
+        // 201 vencidos, cada um 1 s mais novo que o anterior: o último fica para a próxima.
+        await prisma.ticket.createMany({
+          data: Array.from({ length: 201 }, (_, i) =>
+            ticketData(customer, { status: 'RESOLVED', resolvedAt: new Date(base + i * 1000) }),
+          ),
+        });
+
+        expect((await run().expect(200)).body.closed).toBe(200);
+        const left = await prisma.ticket.findMany({ where: { status: 'RESOLVED' } });
+        expect(left.map((t) => t.resolvedAt)).toEqual([new Date(base + 200 * 1000)]);
+
+        expect((await run().expect(200)).body.closed).toBe(1);
+        expect(await prisma.ticket.count({ where: { status: 'CLOSED' } })).toBe(201);
+      },
+    );
+
+    it(
+      'sem o lock da atribuição: 503 com Retry-After, e o fechamento anterior já gravou',
+      { timeout: 15_000 },
+      async () => {
+        const customer = await createActor(app, 'CUSTOMER', 'cliente');
+        const agent = await createActor(app, 'AGENT', 'agente', { isAvailable: true });
+        const expired = new Date(Date.now() - REOPEN_WINDOW_MS - 60_000);
+        const old = await makeTicket(customer, { status: 'RESOLVED', resolvedAt: expired });
+        const orphan = await makeTicket(customer, { status: 'OPEN' });
+        const byId = (id: string) => prisma.ticket.findUniqueOrThrow({ where: { id } });
+
+        await withLockHeld(async () => {
+          const res = await run().expect(503);
+          expect(res.headers['retry-after']).toBe('1');
+          expect(res.body.code).toBe('ASSIGNMENT_BUSY');
+        });
+        // O 503 só cobre o passo do lock: o fechamento veio antes e ficou.
+        expect((await byId(old.id)).status).toBe('CLOSED');
+        expect((await byId(orphan.id)).assigneeId).toBeNull();
+
+        const retry = await run().expect(200);
+        expect(retry.body).toEqual({ restored: false, closed: 0, assigned: 1 });
+        expect((await byId(orphan.id)).assigneeId).toBe(agent.id);
+      },
+    );
   });
 
   it('responde 404 sem JOBS_SECRET configurado', async () => {
