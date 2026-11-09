@@ -39,8 +39,11 @@ async function consume(
  * públicas, então o limite por usuário sozinho não segura várias contas; o teto dá
  * uma folga conhecida ao banco, ao custo de um abuso contínuo travar as escritas.
  *
- * Roda em @UseGuards, depois do JwtAuthGuard global. Quem já passou do próprio
- * limite não consome o teto, para uma só conta não bloquear todo mundo.
+ * Roda em @UseGuards, depois do JwtAuthGuard global, e soma ao @Throttle por IP da
+ * rota, não o substitui. Quem já passou do próprio limite não consome o teto, para
+ * uma só conta não bloquear todo mundo. A chave por rota é `Classe.método`: renomear
+ * o handler zera a contagem dele, e o teto de 30 é um só para todas as rotas.
+ * Quais rotas usam o guard está fixado em rate-limit.bindings.spec.ts.
  */
 @Injectable()
 export class UserRateLimitGuard implements CanActivate {

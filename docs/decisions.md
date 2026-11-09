@@ -2,6 +2,16 @@
 
 Registro curto das decisões que não são óbvias pelo código. A mais recente fica no topo.
 
+## 2026-11-08 — Limites de escrita depois da Fase 7
+
+- **`no-store` em toda a API**: um middleware em `configureApp` põe `Cache-Control: no-store` em
+  toda resposta, inclusive erros. Conferido pela Vercel depois do deploy: 401 e 404 chegam com
+  `no-store`; a Vercel só aplica o padrão dela quando a origem não manda nenhum.
+- **Fora do `UserRateLimitGuard`, por decisão**: `POST /tickets/:id/transitions` e
+  `PUT /sla-policies/:priority` ficam só com o limite global de 120/min por IP. O
+  `rate-limit.bindings.spec.ts` fixa as duas listas; uma escrita nova faz o teste falhar até
+  alguém decidir se ela entra no limite.
+
 ## 2026-11-08 — Primeiro deploy medido (Fase 7)
 
 Resultados em [runbook-deploy.md](runbook-deploy.md#resultado-do-primeiro-deploy-2026-11-08).
