@@ -17,15 +17,15 @@
     "db:seed": "node dist/seed.js"
   },
   "dependencies": {
-    "@nestjs/common": "^12.3.2",
-    "@nestjs/core": "^12.3.2",
-    "@nestjs/jwt": "^12.0.3",
-    "@nestjs/platform-express": "^12.3.2",
+    "@nestjs/common": "^12.4.0",
+    "@nestjs/core": "^12.4.0",
+    "@nestjs/jwt": "^12.0.4",
+    "@nestjs/platform-express": "^12.4.0",
     "@nestjs/throttler": "^6.7.1",
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
     "@support-flow/shared": "^0.0.0",
-    "argon2": "^0.45.1",
+    "argon2": "^0.45.2",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "cookie-parser": "^1.4.7",
@@ -36,10 +36,10 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@nestjs/cli": "^12.0.10",
+    "@nestjs/cli": "^12.0.12",
     "@nestjs/schematics": "^12.0.10",
-    "@nestjs/testing": "^12.3.2",
-    "@swc/core": "^1.16.20",
+    "@nestjs/testing": "^12.4.0",
+    "@swc/core": "^1.16.22",
     "@types/cookie-parser": "^1.4.10",
     "@types/express": "^5.0.6",
     "@types/node": "^24.19.2",
@@ -48,6 +48,6 @@
     "prisma": "^7.10.1",
     "supertest": "^7.3.1",
     "unplugin-swc": "^2.0.0",
-    "vitest": "^5.0.5"
+    "vitest": "^5.1.0"
   }
 }
