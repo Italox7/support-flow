@@ -33,7 +33,7 @@ export function noStore(_req: Request, res: Response, next: NextFunction): void 
 const xffLogger = new Logger('TrustProxy');
 
 /** Mede o TRUST_PROXY no deploy: registra só a contagem, nunca os IPs. */
-function logForwardedForCount(req: Request, _res: Response, next: NextFunction): void {
+export function logForwardedForCount(req: Request, _res: Response, next: NextFunction): void {
   const forwarded = req.headers['x-forwarded-for'];
   const value = Array.isArray(forwarded) ? forwarded.join(',') : forwarded;
   xffLogger.log(`X-Forwarded-For com ${value ? value.split(',').length : 0} entrada(s)`);
