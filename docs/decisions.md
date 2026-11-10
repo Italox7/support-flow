@@ -2,6 +2,60 @@
 
 Registro curto das decisões que não são óbvias pelo código. A mais recente fica no topo.
 
+## 2026-11-09 — Limite de falhas de login por e-mail e fila do argon2
+
+Pendências do Gard desde a Fase 2. Desenho revisado pelo Gard, pelo Archie e pela Pixie antes do
+código; custo do argon2 medido pelo Perry.
+
+- **10 falhas de login em 15 min por e-mail, depois 429** com `Retry-After` igual ao que resta
+  da janela. Soma ao limite por IP, que um `X-Forwarded-For` forjado contorna. Fica no
+  `AuthService.login`, não num guard: o guard roda antes do DTO e veria o e-mail sem
+  normalizar. A chave é um HMAC do e-mail com segredo aleatório por processo: o e-mail em claro
+  não fica na memória. Cada tentativa reserva a falha antes do banco e do argon2 (pedidos em
+  paralelo não furam o limite), e a reserva volta no sucesso ou em qualquer erro que não seja
+  senha errada. O 429 tem o mesmo corpo do 429 por IP e sai igual para e-mail existente e
+  inexistente, sem banco nem argon2. Em memória: o cold start zera, e ao escalar os contadores
+  vão para um armazenamento compartilhado, com a chave do HMAC virando segredo.
+- **Sem limite global de login**: ele deixaria uma pessoa travar a demo inteira. O teto global
+  é a fila do argon2, que degrada para um 503 passageiro.
+- **Contas da demo isentas do limite por e-mail com `DEMO_RESET_ENABLED`** (lista fixa em
+  `auth/demo-emails.ts`, nunca o papel lido no banco). A senha delas é pública, então o limite
+  não protegeria nada e só deixaria alguém travar a demo para os visitantes.
+- **Riscos aceitos**: alguém que conhece o e-mail de outra conta pode travá-la por 15 min
+  (lockout dirigido). E quem usa os e-mails isentos da demo pode encher a fila do argon2: aí os
+  logins de todos levam 503 enquanto durar o abuso, ainda contido pelo limite por IP.
+  O teto de 10.000 e-mails conta só os que têm falha confirmada, e só eles são despejados, do
+  mais antigo para o mais novo. Pedidos pendentes, que não pagam argon2, não tiram um alvo do
+  Map. Zerar a contagem de um alvo exige 10.000 falhas confirmadas dentro da janela, todas
+  passando pela fila do argon2. O log `login_attempts_evicted` sai amostrado. Oráculo fraco e
+  aceito: levar 429 com menos de 10 falhas próprias mostra que outra pessoa errou a senha
+  daquele e-mail nos últimos 15 min.
+- **Fila do argon2 em `password.ts`**: no máximo 2 hashes ao mesmo tempo, 8 na fila e 3 s de
+  espera. Cobre todos os chamadores (login, cadastro, criar agente, seed, demo-reset), e um teste
+  garante que só `password.ts` importa o `argon2`. Números do Perry: ~35 ms de CPU e ~19 MiB
+  nativos por hash, medidos local; no Render free, ~350 ms estimados, coerente com o M5 de
+  2026-11-08 (5 logins simultâneos em 1,5 a 1,9 s). Medição pendente: M7 do runbook no próximo
+  deploy, rodada pelo usuário; o Perry decide os números a partir dela, e o resultado fica no
+  runbook. O demo-reset faz um hash só para as três contas e entra na frente da fila, sem teto
+  nem timeout. Testes que fixam o comportamento: `password-gate.spec.ts`,
+  `login-attempts.spec.ts` e `auth.service.spec.ts`.
+- **`503` com `code: 'PASSWORD_HASH_BUSY'` e `Retry-After: 2`** quando a fila enche ou a espera
+  estoura. Não é 429: o problema é capacidade do servidor, não excesso do cliente. Como o
+  `ASSIGNMENT_BUSY`, garante que nada foi gravado, porque todo chamador faz o hash antes de
+  escrever. Mesmo assim o front **não** repete o `PASSWORD_HASH_BUSY` em nenhuma tela: com a fila
+  cheia, repetir só aumenta a carga, e o `Retry-After: 2` é só indicação. Decisão do usuário,
+  contra a sugestão do Archie de repetir em criar agente. O `ASSIGNMENT_BUSY` segue como na
+  entrada de 2026-11-04.
+- **Correção da entrada de 2026-11-04**: a repetição automática do 503 só existe em `api()`.
+  Login e cadastro saem pelo `fetch` da sessão (`session.ts`) e nunca repetiram nenhum 503.
+- **Textos**: o 429 diz "Aguarde cerca de N minutos", calculado uma vez a partir do
+  `Retry-After`, sem contagem regressiva nem o número exato do limite; no login, fala de
+  "tentativas de entrada", sem sugerir que a conta existe ou foi bloqueada. O 503 do hash diz
+  que nada foi salvo (no login, só pede para tentar de novo). Campos e senha ficam preenchidos,
+  e o botão volta a ficar habilitado.
+- **Revisitar quando**: a API passar de uma instância; `password_hash_busy` ou `login_locked`
+  aparecerem no log de produção sem um teste nosso; ou o verify no Render (M7) passar de 1 s.
+
 ## 2026-11-08 — Limites de escrita depois da Fase 7
 
 - **`no-store` em toda a API**: um middleware em `configureApp` põe `Cache-Control: no-store` em
@@ -76,7 +130,8 @@ Desenho revisado pelo Gard e pela Pixie antes do código.
   "lock ocupado": uma queda do banco ao tomar o lock sai com ele também. Só esse 503 garante isso. Um 503 de proxy pode vir depois de a API gravar e, como
   `POST /tickets` não tem chave de idempotência, repetir criaria um ticket duplicado. O front
   repete só com status 503, `Retry-After` inteiro de 1 a 5 e esse `code`, em até 3 tentativas
-  no total. O 429 nunca repete.
+  no total. O 429 nunca repete. (Correção em 2026-11-09: a repetição só existe em `api()`; login
+  e cadastro saem por `session.ts` e não repetem nenhum 503.)
 - **Cada aba renova o próprio access token, em fila num Web Lock.** A rotação só revoga a
   família quando o token apresentado já foi revogado; em fila, cada aba manda o cookie que a
   anterior deixou. O BroadcastChannel leva só avisos, nunca o token, que fica só em memória.

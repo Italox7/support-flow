@@ -2,6 +2,9 @@ import { Logger } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import type { NextFunction, Request, Response } from 'express';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AssignmentBusyFilter } from './assignment/assignment-busy.js';
+import { LoginLockedFilter } from './auth/login-attempts.js';
+import { PasswordHashBusyFilter } from './auth/password-busy.filter.js';
 import { configureApp, logForwardedForCount, noStore } from './app.setup.js';
 import type { Env } from './config/env.js';
 
@@ -65,5 +68,14 @@ describe('configureApp', () => {
     const off = appMock();
     configureApp(off as unknown as NestExpressApplication, env(false));
     expect(used(off)).not.toContain(logForwardedForCount);
+  });
+
+  it('registra os filtros que escrevem o Retry-After do 503 e do 429', () => {
+    const app = appMock();
+    configureApp(app as unknown as NestExpressApplication, env(false));
+    const filters = app.useGlobalFilters.mock.calls.flat();
+    for (const Filter of [AssignmentBusyFilter, PasswordHashBusyFilter, LoginLockedFilter]) {
+      expect(filters.some((filter) => filter instanceof Filter)).toBe(true);
+    }
   });
 });

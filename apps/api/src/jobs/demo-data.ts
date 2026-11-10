@@ -1,4 +1,5 @@
 import type { Priority, TicketStatus } from '@support-flow/shared';
+import { DEMO_EMAILS } from '../auth/demo-emails.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { computeDeadlines, type SlaPolicyMinutes } from '../sla/sla-deadlines.js';
 
@@ -13,11 +14,11 @@ export const DEMO_AGENT_ID = '00000000-0000-4000-8000-00000000a002';
 export const DEMO_CUSTOMER_ID = '00000000-0000-4000-8000-00000000a003';
 
 export const DEMO_ACCOUNTS = [
-  { id: DEMO_ADMIN_ID, email: 'admin@demo.example.com', name: 'Admin Demo', role: 'ADMIN' },
-  { id: DEMO_AGENT_ID, email: 'agente@demo.example.com', name: 'Agente Demo', role: 'AGENT' },
+  { id: DEMO_ADMIN_ID, email: DEMO_EMAILS.admin, name: 'Admin Demo', role: 'ADMIN' },
+  { id: DEMO_AGENT_ID, email: DEMO_EMAILS.agent, name: 'Agente Demo', role: 'AGENT' },
   {
     id: DEMO_CUSTOMER_ID,
-    email: 'cliente@demo.example.com',
+    email: DEMO_EMAILS.customer,
     name: 'Cliente Demo',
     role: 'CUSTOMER',
   },

@@ -1,9 +1,13 @@
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { PASSWORD_HASH_BUSY_CODE } from '@support-flow/shared';
+import { DEMO_EMAILS } from '../src/auth/demo-emails.js';
+import { LOGIN_FAILURE_LIMIT } from '../src/auth/login-attempts.js';
+import { hashPassword } from '../src/auth/password.js';
 import { REFRESH_COOKIE } from '../src/auth/refresh-token.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
-import { createApp, resetDatabase, TEST_DATABASE_URL } from './e2e-setup.js';
+import { createApp, fillPasswordGate, resetDatabase, TEST_DATABASE_URL } from './e2e-setup.js';
 
 /** Valor do cookie de refresh (`refresh_token=<valor>`) num Set-Cookie. */
 function refreshCookie(res: request.Response): string {
@@ -110,6 +114,42 @@ describe.skipIf(!TEST_DATABASE_URL)('auth (e2e)', () => {
         .send({ email: 'ninguem@example.com', password: 'senha-errada' })
         .expect(401);
       expect(wrong.body).toEqual(unknown.body);
+    });
+  });
+
+  describe('fila do argon2 cheia', () => {
+    it('cadastro leva 503 com o code, sem gravar usuário nem refresh token', async () => {
+      const release = fillPasswordGate();
+      try {
+        const res = await http().post('/api/auth/register').send(customer).expect(503);
+        expect(res.headers['retry-after']).toBe('2');
+        expect(res.body.code).toBe(PASSWORD_HASH_BUSY_CODE);
+      } finally {
+        await release();
+      }
+      expect(await prisma.user.count()).toBe(0);
+      expect(await prisma.refreshToken.count()).toBe(0);
+    });
+
+    it('login leva 503 e a tentativa não conta para o limite por e-mail', async () => {
+      // E-mail só deste teste: o LoginAttempts vive no app, que é um só para o arquivo,
+      // e o resetDatabase não o zera. Com o e-mail compartilhado, as falhas de outros
+      // testes somariam aqui, e as 10 deste travariam o login dos testes seguintes.
+      const own = { ...customer, email: 'fila-cheia@example.com' };
+      await http().post('/api/auth/register').send(own).expect(201);
+      const wrong = { email: own.email, password: 'senha-errada' };
+      const release = fillPasswordGate();
+      try {
+        for (let i = 0; i < LOGIN_FAILURE_LIMIT; i++) {
+          const res = await http().post('/api/auth/login').send(wrong).expect(503);
+          expect(res.body.code).toBe(PASSWORD_HASH_BUSY_CODE);
+        }
+      } finally {
+        await release();
+      }
+      for (let i = 0; i < LOGIN_FAILURE_LIMIT; i++) {
+        await http().post('/api/auth/login').send(wrong).expect(401);
+      }
     });
   });
 
@@ -225,5 +265,100 @@ describe.skipIf(!TEST_DATABASE_URL)('auth rate limit (e2e)', () => {
 
     for (let i = 0; i < 5; i++) await attempt().expect(401);
     await attempt().expect(429);
+  });
+});
+
+describe.skipIf(!TEST_DATABASE_URL)('limite de falhas de login por e-mail (e2e)', () => {
+  let app: NestExpressApplication;
+  let prisma: PrismaService;
+  let ip = 0;
+  // Um IP novo por requisição: o limite por e-mail não depende do X-Forwarded-For.
+  const login = (email: string, password = 'senha-errada') =>
+    request(app.getHttpServer())
+      .post('/api/auth/login')
+      .set('X-Forwarded-For', `203.0.113.${(ip = (ip % 250) + 1)}`)
+      .send({ email, password });
+
+  beforeAll(async () => {
+    app = await createApp({ throttle: true, env: { TRUST_PROXY: 1 } });
+    prisma = app.get(PrismaService);
+  });
+
+  afterAll(async () => {
+    await app?.close();
+  });
+
+  beforeEach(async () => {
+    await resetDatabase(prisma);
+  });
+
+  it(`a ${LOGIN_FAILURE_LIMIT + 1}ª falha leva 429, igual para e-mail existente e inexistente`, async () => {
+    await prisma.user.create({
+      data: {
+        email: 'existe@example.com',
+        name: 'Existe',
+        role: 'CUSTOMER',
+        passwordHash: await hashPassword('senha-certa'),
+      },
+    });
+    const locked: request.Response[] = [];
+    for (const email of ['existe@example.com', 'ninguem@example.com']) {
+      for (let i = 0; i < LOGIN_FAILURE_LIMIT; i++) await login(email).expect(401);
+      locked.push(await login(email).expect(429));
+    }
+    const [existing, unknown] = locked;
+    expect(existing!.body).toEqual(unknown!.body);
+    for (const res of locked) expect(Number(res.headers['retry-after'])).toBeGreaterThan(60);
+
+    // Bloqueado, nem a senha certa entra.
+    await login('existe@example.com', 'senha-certa').expect(429);
+  });
+
+  it('logins certos não acumulam', async () => {
+    await prisma.user.create({
+      data: {
+        email: 'certo@example.com',
+        name: 'Certo',
+        role: 'CUSTOMER',
+        passwordHash: await hashPassword('senha-certa'),
+      },
+    });
+    for (let i = 0; i < LOGIN_FAILURE_LIMIT + 2; i++) {
+      await login('certo@example.com', 'senha-certa').expect(200);
+    }
+    await login('certo@example.com').expect(401);
+  });
+});
+
+describe.skipIf(!TEST_DATABASE_URL)('contas da demo no limite por e-mail (e2e)', () => {
+  let app: NestExpressApplication;
+
+  beforeAll(async () => {
+    app = await createApp({ throttle: false, env: { DEMO_RESET_ENABLED: true } });
+    const prisma = app.get(PrismaService);
+    await resetDatabase(prisma);
+    await prisma.user.create({
+      data: {
+        email: DEMO_EMAILS.customer,
+        name: 'Cliente Demo',
+        role: 'CUSTOMER',
+        passwordHash: await hashPassword('senha-da-demo'),
+      },
+    });
+  });
+
+  afterAll(async () => {
+    await app?.close();
+  });
+
+  it('com a demo ligada, a conta demo não trava; outro e-mail trava', async () => {
+    const login = (email: string, password = 'senha-errada') =>
+      request(app.getHttpServer()).post('/api/auth/login').send({ email, password });
+
+    for (let i = 0; i < LOGIN_FAILURE_LIMIT + 2; i++) await login(DEMO_EMAILS.customer).expect(401);
+    await login(DEMO_EMAILS.customer, 'senha-da-demo').expect(200);
+
+    for (let i = 0; i < LOGIN_FAILURE_LIMIT; i++) await login('outro@example.com').expect(401);
+    await login('outro@example.com').expect(429);
   });
 });

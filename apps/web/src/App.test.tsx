@@ -45,7 +45,10 @@ function detail(overrides: Partial<TicketDetail> = {}): TicketDetail {
   };
 }
 
-const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
+  new Response(JSON.stringify(body), { status, headers });
+const hashBusy = () =>
+  json({ code: 'PASSWORD_HASH_BUSY', message: 'ocupado' }, 503, { 'Retry-After': '2' });
 
 type Handler = (init: RequestInit) => Response;
 
@@ -373,7 +376,7 @@ describe('listas', () => {
     await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'));
     fireEvent.click(toggle);
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Aguarde um minuto');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Aguarde alguns minutos');
     expect(toggle).toHaveAttribute('aria-checked', 'true');
   });
 
@@ -1042,7 +1045,7 @@ describe('correções das revisões', () => {
     type(screen.getByLabelText('Descrição'), 'Descrição');
     fireEvent.click(screen.getByRole('button', { name: 'Abrir ticket' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Aguarde um minuto');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Aguarde alguns minutos');
     expect(title).toHaveValue('Título');
   });
 
@@ -1056,7 +1059,7 @@ describe('correções das revisões', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Marcar como resolvido' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Aguarde um minuto');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Aguarde alguns minutos');
     expect(screen.getByText('Status: Em andamento')).toBeInTheDocument();
   });
 
@@ -1262,5 +1265,82 @@ describe('troca de pessoa com a tela aberta', () => {
       body: 'Resposta pública',
       isInternal: false,
     });
+  });
+});
+
+describe('limites do hash de senha e do login', () => {
+  const fillLogin = async () => {
+    const email = await screen.findByLabelText('E-mail');
+    const password = screen.getByLabelText('Senha');
+    type(email, 'a@x.dev');
+    type(password, 'minha-senha');
+    fireEvent.click(screen.getByRole('button', { name: 'Entrar' }));
+    return { email, password };
+  };
+
+  it('429 no login diz quanto esperar, sem falar em conta, e mantém os campos', async () => {
+    const calls = stubApi(null, {
+      'POST /auth/login': () => json({ statusCode: 429 }, 429, { 'Retry-After': '840' }),
+    });
+    await renderAt('/entrar');
+    const { email, password } = await fillLogin();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
+      'Muitas tentativas de entrada. Aguarde cerca de 14 minutos e tente de novo.',
+    );
+    expect(alert).not.toHaveTextContent(/conta|bloque/i);
+    expect(email).toHaveValue('a@x.dev');
+    expect(password).toHaveValue('minha-senha');
+    expect(screen.getByRole('button', { name: 'Entrar' })).toBeEnabled();
+    expect(calls.filter(({ key }) => key === 'POST /auth/login')).toHaveLength(1);
+  });
+
+  it('503 do hash no login avisa e não repete sozinho', async () => {
+    const calls = stubApi(null, { 'POST /auth/login': hashBusy });
+    await renderAt('/entrar');
+    const { password } = await fillLogin();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'O servidor está ocupado agora. Tente entrar de novo em alguns segundos.',
+    );
+    expect(password).toHaveValue('minha-senha');
+    expect(screen.getByRole('button', { name: 'Entrar' })).toBeEnabled();
+    expect(calls.filter(({ key }) => key === 'POST /auth/login')).toHaveLength(1);
+  });
+
+  it('503 do hash no cadastro diz que nada foi salvo e não repete', async () => {
+    const calls = stubApi(null, { 'POST /auth/register': hashBusy });
+    await renderAt('/cadastro');
+
+    type(await screen.findByLabelText('Nome'), 'Ana');
+    type(screen.getByLabelText('E-mail'), 'a@x.dev');
+    const password = screen.getByLabelText('Senha');
+    type(password, 'senha-forte');
+    fireEvent.click(screen.getByRole('button', { name: 'Criar conta' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Nada foi salvo.');
+    expect(password).toHaveValue('senha-forte');
+    expect(screen.getByRole('button', { name: 'Criar conta' })).toBeEnabled();
+    expect(calls.filter(({ key }) => key === 'POST /auth/register')).toHaveLength(1);
+  });
+
+  it('503 do hash ao criar agente avisa, mantém a senha e não repete', async () => {
+    const calls = stubApi(ADMIN, {
+      'GET /users/agents': () => json([]),
+      'POST /users/agents': hashBusy,
+    });
+    await renderAt('/admin/agentes');
+
+    await screen.findByText(/Nenhum agente cadastrado/);
+    type(screen.getByLabelText('Nome'), 'Bia');
+    type(screen.getByLabelText('E-mail'), 'b@x.dev');
+    const password = screen.getByLabelText('Senha inicial');
+    type(password, 'senha-forte');
+    fireEvent.click(screen.getByRole('button', { name: 'Criar agente' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Nada foi salvo.');
+    expect(password).toHaveValue('senha-forte');
+    expect(calls.filter(({ key }) => key === 'POST /users/agents')).toHaveLength(1);
   });
 });

@@ -152,4 +152,29 @@ describe('erros', () => {
   it('avisa quando uma escrita pode ter sido gravada', () => {
     expect(describeError(new ApiError(0, null, true))).toMatch(/Confira se a ação foi concluída/);
   });
+
+  it.each([
+    ['1', 'cerca de 1 minuto'],
+    ['60', 'cerca de 1 minuto'],
+    ['61', 'cerca de 2 minutos'],
+    ['900', 'cerca de 15 minutos'],
+    ['abc', 'alguns minutos'],
+    [null, 'alguns minutos'],
+  ])('429 com Retry-After %s diz "%s"', (header, wait) => {
+    const headers: Record<string, string> = header === null ? {} : { 'Retry-After': header };
+    const error = ApiError.fromResponse(new Response(null, { status: 429, headers }), null);
+    expect(describeError(error)).toBe(`Muitas tentativas. Aguarde ${wait} e tente de novo.`);
+    expect(describeError(error, { action: 'login' })).toBe(
+      `Muitas tentativas de entrada. Aguarde ${wait} e tente de novo.`,
+    );
+  });
+
+  it('503 do hash tem texto próprio; outro 503 continua genérico', () => {
+    const busy = new ApiError(503, { code: 'PASSWORD_HASH_BUSY' });
+    expect(describeError(busy)).toMatch(/Nada foi salvo/);
+    expect(describeError(busy, { action: 'login' })).not.toMatch(/salvo/);
+    expect(describeError(new ApiError(503, null))).toBe(
+      'O sistema está ocupado. Tente de novo em instantes.',
+    );
+  });
 });
