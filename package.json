@@ -10,7 +10,7 @@
     "node": ">=22.22"
   },
   "scripts": {
-    "postinstall": "npm run build -w @support-flow/shared",
+    "setup": "npm run build -w @support-flow/shared && npm run prisma:generate -w @support-flow/api",
     "dev:api": "npm run dev -w @support-flow/api",
     "dev:web": "npm run dev -w @support-flow/web",
     "build": "npm run build -w @support-flow/shared && npm run build -w @support-flow/api && npm run build -w @support-flow/web",
