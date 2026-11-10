@@ -604,6 +604,90 @@ describe('ticket', () => {
     expect(field).toHaveValue('Meu texto');
   });
 
+  it.each([
+    ['do ticket', `GET /tickets/${TICKET_ID}`],
+    ['dos comentários', `GET /tickets/${TICKET_ID}/comments`],
+  ])('Recarregar com a leitura %s falhando não diz que atualizou', async (_, failing) => {
+    const reads: Record<string, number> = {};
+    const once = (key: string, body: unknown) => () => {
+      reads[key] = (reads[key] ?? 0) + 1;
+      return key === failing && reads[key] > 1 ? json({ message: 'falhou' }, 500) : json(body);
+    };
+    stubApi(CUSTOMER, {
+      [`GET /tickets/${TICKET_ID}`]: once(`GET /tickets/${TICKET_ID}`, detail()),
+      [`GET /tickets/${TICKET_ID}/comments`]: once(`GET /tickets/${TICKET_ID}/comments`, []),
+      [`POST /tickets/${TICKET_ID}/comments`]: () =>
+        json({ message: 'Ticket fechado não aceita comentários.' }, 409),
+    });
+    await renderAt(`/tickets/${TICKET_ID}`);
+
+    const field = await screen.findByLabelText('Comentário');
+    type(field, 'Meu texto');
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Recarregar ticket' }));
+
+    expect(
+      await screen.findByText('Não foi possível atualizar o ticket agora.'),
+    ).toBeInTheDocument();
+    expect(reads[failing]).toBe(2);
+    expect(screen.queryByText('Ticket atualizado.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Recarregar ticket' })).toBeInTheDocument();
+    expect(field).toHaveValue('Meu texto');
+  });
+
+  it('comentário enviado com a leitura do ticket falhando não cala o status e oferece Recarregar', async () => {
+    let status: TicketDetail['status'] = 'WAITING_CUSTOMER';
+    let reads = 0;
+    stubApi(CUSTOMER, {
+      [`GET /tickets/${TICKET_ID}`]: () => {
+        reads += 1;
+        // 2ª leitura (depois do envio) falha; a do botão Recarregar volta com o status novo.
+        return reads === 2 ? json({ message: 'falhou' }, 500) : json(detail({ status }));
+      },
+      [`GET /tickets/${TICKET_ID}/comments`]: () => json([]),
+      [`POST /tickets/${TICKET_ID}/comments`]: () => {
+        status = 'IN_PROGRESS';
+        return json({}, 201);
+      },
+    });
+    await renderAt(`/tickets/${TICKET_ID}`);
+
+    type(await screen.findByLabelText('Comentário'), 'Segue a resposta');
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar' }));
+
+    expect(await screen.findByText('Seu comentário foi enviado.')).toBeInTheDocument();
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Não foi possível atualizar o ticket agora.');
+
+    fireEvent.click(within(alert).getByRole('button', { name: 'Recarregar ticket' }));
+
+    expect(await screen.findByText('Ticket atualizado.')).toBeInTheDocument();
+    expect(screen.getByText('Status: Em andamento')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('comentário enviado com a leitura dos comentários falhando avisa que a lista não atualizou', async () => {
+    let commentReads = 0;
+    stubApi(CUSTOMER, {
+      [`GET /tickets/${TICKET_ID}`]: () => json(detail()),
+      [`GET /tickets/${TICKET_ID}/comments`]: () => {
+        commentReads += 1;
+        return commentReads === 1 ? json([]) : json({ message: 'falhou' }, 500);
+      },
+      [`POST /tickets/${TICKET_ID}/comments`]: () => json({}, 201),
+    });
+    await renderAt(`/tickets/${TICKET_ID}`);
+
+    type(await screen.findByLabelText('Comentário'), 'Segue a resposta');
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar' }));
+
+    expect(await screen.findByText('Seu comentário foi enviado.')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Não foi possível atualizar o ticket agora.',
+    );
+    expect(commentReads).toBe(2);
+  });
+
   it('comentário que muda o status recarrega, avisa e limpa o rascunho', async () => {
     let status: TicketDetail['status'] = 'WAITING_CUSTOMER';
     stubApi(CUSTOMER, {
