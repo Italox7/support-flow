@@ -1208,10 +1208,56 @@ describe('troca de pessoa com a tela aberta', () => {
         json({ accessToken: `token-${state.person.id}`, user: state.person }),
       [`GET /tickets/${TICKET_ID}`]: () => json(detail({ allowedTransitions: ['RESOLVED'] })),
       [`GET /tickets/${TICKET_ID}/comments`]: () => json([]),
+      'GET /tickets?page=1': () => json({ items: [], page: 1, pageSize: 20, total: 0 }),
       ...extra,
     });
     return { state, calls };
   }
+
+  it('outra pessoa adotada nesta aba sai da URL de A e vai para a própria tela inicial', async () => {
+    const OTHER_CUSTOMER: AuthUser = { ...CUSTOMER, id: 'c2', name: 'Caio' };
+    let person = ADMIN;
+    const calls = stubApi(ADMIN, {
+      'POST /auth/refresh': () => json({ accessToken: `token-${person.id}`, user: person }),
+      'GET /sla-policies': () => json([]),
+      'GET /tickets?page=1': () => json({ items: [], page: 1, pageSize: 20, total: 0 }),
+    });
+    await renderAt('/admin/sla');
+    await screen.findByRole('heading', { name: 'Prazos de SLA' });
+
+    // O aviso user-changed de outra aba roda o bootstrap com o cookie de B.
+    person = OTHER_CUSTOMER;
+    await act(() => session.bootstrap());
+
+    expect(await screen.findByRole('heading', { name: 'Meus tickets' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Sem acesso' })).not.toBeInTheDocument();
+    expect(calls.filter(({ key }) => key === 'GET /sla-policies')).toHaveLength(1);
+  });
+
+  it('equipe trocada não reabre o ticket de A com o token de B', async () => {
+    const { state, calls } = stubPeople();
+    await renderAt(`/tickets/${TICKET_ID}`);
+    await screen.findByRole('heading', { name: '#7 Impressora parada' });
+
+    state.person = OTHER;
+    await act(() => session.bootstrap());
+
+    expect(await screen.findByRole('heading', { name: 'Fila de tickets' })).toBeInTheDocument();
+    expect(ticketReads(calls)).toBe(1);
+  });
+
+  it('a mesma pessoa restaurada continua na tela em que estava', async () => {
+    stubPeople();
+    await renderAt(`/tickets/${TICKET_ID}`);
+    await screen.findByRole('heading', { name: '#7 Impressora parada' });
+
+    await act(() => session.bootstrap());
+
+    expect(
+      await screen.findByRole('heading', { name: '#7 Impressora parada' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Fila de tickets' })).not.toBeInTheDocument();
+  });
 
   it('comentário de A respondido depois da troca não busca nada com o token de B', async () => {
     let answer: (res: Response) => void = () => undefined;
@@ -1230,16 +1276,15 @@ describe('troca de pessoa com a tela aberta', () => {
 
     state.person = OTHER;
     await act(() => session.bootstrap());
-    await screen.findByLabelText('Comentário');
-    await waitFor(() => expect(ticketReads(calls)).toBe(2));
+    await screen.findByRole('heading', { name: 'Fila de tickets' });
 
     await act(async () => {
       answer(json({}, 201));
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
 
-    // A primeira de A e a primeira de B: nenhuma a mais depois da resposta.
-    expect(ticketReads(calls)).toBe(2);
+    // Só a leitura de A: nem a troca nem a resposta atrasada leem o ticket como B.
+    expect(ticketReads(calls)).toBe(1);
     expect(loadDraft('a1', TICKET_ID).text).toBe('');
   });
 
@@ -1259,22 +1304,22 @@ describe('troca de pessoa com a tela aberta', () => {
 
     state.person = OTHER;
     await act(() => session.bootstrap());
-    await screen.findByRole('button', { name: 'Marcar como resolvido' });
-    await waitFor(() => expect(ticketReads(calls)).toBe(2));
+    await screen.findByRole('heading', { name: 'Fila de tickets' });
 
     await act(async () => {
       answer(json({ message: 'O ticket mudou.' }, 409));
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
 
-    expect(ticketReads(calls)).toBe(2);
+    expect(ticketReads(calls)).toBe(1);
   });
 
-  it('troca direta de A para B limpa um formulário que não depende de consulta', async () => {
+  it('troca direta de A para B tira B do formulário de A, sem o texto dele', async () => {
     const OTHER_CUSTOMER: AuthUser = { ...CUSTOMER, id: 'c2', name: 'Caio' };
     let person = CUSTOMER;
     stubApi(CUSTOMER, {
       'POST /auth/refresh': () => json({ accessToken: `token-${person.id}`, user: person }),
+      'GET /tickets?page=1': () => json({ items: [], page: 1, pageSize: 20, total: 0 }),
     });
     await renderAt('/tickets/novo');
     type(await screen.findByLabelText('Título'), 'Texto de A');
@@ -1285,7 +1330,8 @@ describe('troca de pessoa com a tela aberta', () => {
       await session.refresh(session.getToken());
     });
 
-    await waitFor(() => expect(screen.getByLabelText('Título')).toHaveValue(''));
+    expect(await screen.findByRole('heading', { name: 'Meus tickets' })).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('Texto de A')).not.toBeInTheDocument();
   });
 
   it('a caixa de nota interna continua marcada: a 2ª nota seguida não sai pública', async () => {
