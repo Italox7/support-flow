@@ -1,5 +1,5 @@
 import type { Role } from '@support-flow/shared';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router';
 import { Layout } from './components/Layout';
 import { Page } from './components/Page';
@@ -27,6 +27,21 @@ interface RedirectState {
 function RequireAuth() {
   const state = useSession();
   const location = useLocation();
+  // Quem estava logado nesta URL. A guarda continua montada quando outra aba
+  // troca a pessoa (user-changed → bootstrap) ou um refresh adota outra: a URL
+  // de A não serve a B, que vai para a própria tela inicial.
+  const [owner, setOwner] = useState<{ key: string; userId: string } | null>(null);
+  const userId = state.status === 'authenticated' ? state.user.id : null;
+  // O dono só é gravado ao chegar numa URL: na mesma URL, outra pessoa não o
+  // substitui. O Navigate abaixo troca a location.key, e aí B vira o dono da nova.
+  // Limite aceito: se B mexer no histórico (Voltar/Avançar) enquanto a sessão
+  // carrega ou está indisponível, a URL de chegada fica com B; a API autoriza a leitura.
+  if (userId !== null && owner?.key !== location.key) {
+    setOwner({ key: location.key, userId });
+  }
+  if (userId !== null && owner?.key === location.key && owner.userId !== userId) {
+    return <Navigate to="/" replace />;
+  }
 
   switch (state.status) {
     case 'loading':
@@ -52,6 +67,8 @@ function RequireAuth() {
     case 'authenticated':
       return (
         // Outra pessoa, tela nova: nada digitado por A pode continuar à vista de B.
+        // Segunda defesa: o Navigate acima já tira B da URL de A; a key cobre o
+        // caso de a troca de URL e a de pessoa caírem no mesmo render.
         <Layout key={state.user.id}>
           <Outlet />
         </Layout>
