@@ -182,6 +182,81 @@ describe('sessão e rotas', () => {
     expect(loadDraft('c1', TICKET_ID).text).toBe('Texto importante');
   });
 
+  describe('destino de sessão expirada', () => {
+    const OTHER: AuthUser = { id: 'c2', email: 'b@x.dev', name: 'Bia', role: 'CUSTOMER' };
+    const emptyPage = () => json({ items: [], page: 1, pageSize: 20, total: 0 });
+
+    /** A admin está em /admin/sla quando a sessão dela expira. */
+    async function expireAdminOnSla(routes: Record<string, Handler>) {
+      let expired = false;
+      stubApi(ADMIN, {
+        'GET /sla-policies': () => {
+          expired = true;
+          return json({}, 401);
+        },
+        'POST /auth/refresh': () =>
+          expired ? json({}, 401) : json({ accessToken: 'token', user: ADMIN }),
+        'GET /tickets?page=1': emptyPage,
+        ...routes,
+      });
+      await renderAt('/admin/sla');
+      expect(await screen.findByRole('heading', { name: 'Entrar' })).toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent('Sua sessão expirou');
+    }
+
+    function submitLogin(email: string) {
+      type(screen.getByLabelText('E-mail'), email);
+      type(screen.getByLabelText('Senha'), 'senha-forte');
+      fireEvent.click(screen.getByRole('button', { name: 'Entrar' }));
+    }
+
+    it('outra pessoa entrando nesta aba vai para a própria tela inicial', async () => {
+      await expireAdminOnSla({
+        'POST /auth/login': () => json({ accessToken: 'token-b', user: OTHER }),
+      });
+
+      submitLogin('b@x.dev');
+
+      expect(await screen.findByRole('heading', { name: 'Meus tickets' })).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Sem acesso' })).not.toBeInTheDocument();
+    });
+
+    it('outra pessoa entrando em outra aba também não herda o destino', async () => {
+      await expireAdminOnSla({});
+
+      // O aviso user-changed faz a aba rodar o bootstrap com o cookie novo.
+      stubApi(OTHER, { 'GET /tickets?page=1': emptyPage });
+      await act(() => session.bootstrap());
+
+      expect(await screen.findByRole('heading', { name: 'Meus tickets' })).toBeInTheDocument();
+    });
+
+    it.each([null, 123, { id: 'c1' }, 'd1'])(
+      'dono %j que não é quem entrou leva ao início, não ao destino',
+      async (owner) => {
+        stubApi(CUSTOMER, { 'GET /tickets?page=1': emptyPage });
+        await renderAt({ pathname: '/entrar', state: { from: '/fila', owner } });
+
+        expect(await screen.findByRole('heading', { name: 'Meus tickets' })).toBeInTheDocument();
+        expect(screen.queryByRole('heading', { name: 'Sem acesso' })).not.toBeInTheDocument();
+      },
+    );
+
+    it('a mesma pessoa voltando a entrar volta ao destino', async () => {
+      await expireAdminOnSla({});
+      // Depois do login, a tela de SLA carrega de novo.
+      stubApi(ADMIN, {
+        'POST /auth/login': json({ accessToken: 'token-2', user: ADMIN }),
+        'GET /sla-policies': json([]),
+      });
+
+      submitLogin('d@x.dev');
+
+      expect(await screen.findByRole('heading', { name: 'Prazos de SLA' })).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Entrar' })).not.toBeInTheDocument();
+    });
+  });
+
   it('sair leva a /entrar sem aviso de expiração', async () => {
     stubApi(CUSTOMER, {
       'GET /tickets?page=1': json({ items: [], page: 1, pageSize: 20, total: 0 }),

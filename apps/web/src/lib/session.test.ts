@@ -203,8 +203,9 @@ describe('Session: falhas do refresh', () => {
     await expect(a.refresh(a.getToken())).rejects.toBeInstanceOf(ApiError);
     await settle();
 
-    expect(a.getState()).toEqual({ status: 'anonymous', reason: 'expired' });
-    expect(b.getState()).toEqual({ status: 'anonymous', reason: 'expired' });
+    // As duas abas sabem de quem era a sessão: a que recebeu o 401 e a avisada pelo canal.
+    expect(a.getState()).toEqual({ status: 'anonymous', reason: 'expired', userId: 'a' });
+    expect(b.getState()).toEqual({ status: 'anonymous', reason: 'expired', userId: 'a' });
     expect(hub.sent).toEqual(['session-ended']);
   });
 
