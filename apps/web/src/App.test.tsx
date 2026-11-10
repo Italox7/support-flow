@@ -546,6 +546,36 @@ describe('ticket', () => {
     expect(reads).toBe(2);
   });
 
+  it.each([403, 409])(
+    'transição recusada com %i e recarga falha não diz que atualizou e oferece Recarregar',
+    async (status) => {
+      let reads = 0;
+      stubApi(AGENT, {
+        [`GET /tickets/${TICKET_ID}`]: () => {
+          reads += 1;
+          if (reads === 2) return json({ message: 'falhou' }, 500);
+          return json(detail({ allowedTransitions: reads === 1 ? ['RESOLVED'] : [] }));
+        },
+        [`GET /tickets/${TICKET_ID}/comments`]: () => json([]),
+        [`POST /tickets/${TICKET_ID}/transitions`]: () =>
+          json({ message: 'O ticket mudou enquanto isso.' }, status),
+      });
+      await renderAt(`/tickets/${TICKET_ID}`);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Marcar como resolvido' }));
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('Não foi possível atualizar as ações agora.');
+      expect(alert).not.toHaveTextContent('Atualizamos');
+      expect(reads).toBe(2);
+
+      fireEvent.click(within(alert).getByRole('button', { name: 'Recarregar ticket' }));
+
+      expect(await screen.findByText('Nenhuma ação disponível neste status.')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    },
+  );
+
   it('409 no comentário mantém o texto e oferece Recarregar ticket', async () => {
     let reads = 0;
     stubApi(CUSTOMER, {
@@ -1312,6 +1342,39 @@ describe('troca de pessoa com a tela aberta', () => {
     });
 
     expect(ticketReads(calls)).toBe(1);
+  });
+
+  it('troca durante a recarga depois da transição recusada não mostra o aviso de A para B', async () => {
+    let reads = 0;
+    let answer: (res: Response) => void = () => undefined;
+    const { state, calls } = stubPeople({
+      [`GET /tickets/${TICKET_ID}`]: (() => {
+        reads += 1;
+        if (reads === 1) return json(detail({ allowedTransitions: ['RESOLVED'] }));
+        return new Promise<Response>((resolve) => {
+          answer = resolve;
+        });
+      }) as never,
+      [`POST /tickets/${TICKET_ID}/transitions`]: () => json({ message: 'O ticket mudou.' }, 409),
+    });
+    await renderAt(`/tickets/${TICKET_ID}`);
+    fireEvent.click(await screen.findByRole('button', { name: 'Marcar como resolvido' }));
+    await waitFor(() => expect(ticketReads(calls)).toBe(2));
+
+    state.person = OTHER;
+    await act(() => session.bootstrap());
+    await screen.findByRole('heading', { name: 'Fila de tickets' });
+
+    await act(async () => {
+      answer(json(detail()));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    // A recarga saiu com o token de A antes da troca; nada novo é lido como B. A tela de A
+    // já desmontou, então isto cobre o resultado, não a 2ª conferência do onError sozinha.
+    expect(ticketReads(calls)).toBe(2);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Fila de tickets' })).toBeInTheDocument();
   });
 
   it('troca direta de A para B tira B do formulário de A, sem o texto dele', async () => {
