@@ -132,8 +132,12 @@ describe.skipIf(!TEST_DATABASE_URL)('auth (e2e)', () => {
     });
 
     it('login leva 503 e a tentativa não conta para o limite por e-mail', async () => {
-      await http().post('/api/auth/register').send(customer).expect(201);
-      const wrong = { email: customer.email, password: 'senha-errada' };
+      // E-mail só deste teste: o LoginAttempts vive no app, que é um só para o arquivo,
+      // e o resetDatabase não o zera. Com o e-mail compartilhado, as falhas de outros
+      // testes somariam aqui, e as 10 deste travariam o login dos testes seguintes.
+      const own = { ...customer, email: 'fila-cheia@example.com' };
+      await http().post('/api/auth/register').send(own).expect(201);
+      const wrong = { email: own.email, password: 'senha-errada' };
       const release = fillPasswordGate();
       try {
         for (let i = 0; i < LOGIN_FAILURE_LIMIT; i++) {
