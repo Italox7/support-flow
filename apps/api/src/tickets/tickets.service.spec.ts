@@ -110,6 +110,32 @@ describe('TicketsService.closeResolvedBefore', () => {
   });
 });
 
+describe('TicketsService.applyTransition', () => {
+  it('a guarda extra não substitui o id nem o status lidos', async () => {
+    const now = new Date('2026-11-09T12:00:00.000Z');
+    const db = { ticket: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) } };
+    const service = new TicketsService(
+      db as unknown as PrismaService,
+      {} as unknown as AssignmentService,
+    );
+    const ticket = { id: 'ticket-id', status: 'RESOLVED', resolvedAt: now };
+    const guard = { id: 'outro-ticket', status: 'OPEN' as const, resolvedAt: now };
+
+    await service.applyTransition(
+      db as unknown as PrismaService,
+      ticket as unknown as Parameters<TicketsService['applyTransition']>[1],
+      'CLOSED',
+      now,
+      guard,
+    );
+    expect(db.ticket.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 'ticket-id', status: 'RESOLVED', resolvedAt: now }),
+      }),
+    );
+  });
+});
+
 describe('TicketsService.update', () => {
   it('só grava se o status, a pausa do SLA e a falta da 1ª resposta ainda forem os lidos', async () => {
     const { service, tx } = serviceWith(0);
