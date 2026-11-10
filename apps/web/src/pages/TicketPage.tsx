@@ -340,21 +340,42 @@ function TicketContent({ id, user }: { id: string; user: AuthUser }) {
   const receivedAt = ticketQuery.dataUpdatedAt;
   const isStaff = user.role !== 'CUSTOMER';
 
+  /**
+   * Recarrega ticket e comentários. `refetch` não lança: falha volta como `isError` com o dado
+   * velho, então quem chama decide o aviso pelo resultado. `null` = outra pessoa entrou no meio.
+   */
+  const refreshAll = async () => {
+    const [fresh, comments] = await Promise.all([ticketQuery.refetch(), commentsQuery.refetch()]);
+    if (session.getUserId() !== user.id) return null;
+    return { fresh, ok: !fresh.isError && !comments.isError };
+  };
+
+  const refreshFailed: ActionError = {
+    message: 'Não foi possível atualizar o ticket agora.',
+    canReload: true,
+  };
+
   const reload = async () => {
     setActionError(null);
-    await Promise.all([ticketQuery.refetch(), commentsQuery.refetch()]);
-    setNotice('Ticket atualizado.');
+    setNotice('');
+    const result = await refreshAll();
+    if (!result) return;
+    if (result.ok) setNotice('Ticket atualizado.');
+    else setActionError(refreshFailed);
   };
 
   const afterComment = async () => {
     const before = ticket.status;
-    const [fresh] = await Promise.all([ticketQuery.refetch(), commentsQuery.refetch()]);
-    const after = fresh.data?.status;
+    const result = await refreshAll();
+    if (!result) return;
+    // Com a leitura do ticket falha, `data` é o status de antes: não dá para afirmar mudança.
+    const after = result.fresh.isError ? undefined : result.fresh.data?.status;
     setNotice(
       after && after !== before
         ? `Seu comentário foi enviado. O status agora é ${statusLabel(after, user.role)}.`
         : 'Seu comentário foi enviado.',
     );
+    if (!result.ok) setActionError(refreshFailed);
   };
 
   const staffError = (failure: unknown) => {
