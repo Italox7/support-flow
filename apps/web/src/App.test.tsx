@@ -813,6 +813,59 @@ describe('ticket', () => {
     expect(select).toHaveValue('HIGH');
   });
 
+  /** Resposta que o teste libera quando quiser: deixa a mutação pendente no meio do caminho. */
+  function pending() {
+    let release!: (response: Response) => void;
+    const response = new Promise<Response>((resolve) => (release = resolve));
+    return { handler: () => response as unknown as Response, release };
+  }
+
+  it('transição pendente trava prioridade e responsável até a resposta', async () => {
+    const post = pending();
+    stubApi(
+      ADMIN,
+      routesFor(detail({ allowedTransitions: ['RESOLVED'] }), {
+        'GET /users/agents': json([
+          { id: 'a1', name: 'Ari', email: 'a@x.dev', isAvailable: true, openTickets: 1 },
+        ]),
+        [`POST /tickets/${TICKET_ID}/transitions`]: post.handler,
+      }),
+    );
+    await renderAt(`/tickets/${TICKET_ID}`);
+
+    await screen.findByRole('option', { name: 'Ari' });
+    fireEvent.click(screen.getByRole('button', { name: 'Marcar como resolvido' }));
+
+    await waitFor(() => expect(screen.getByLabelText('Prioridade')).toBeDisabled());
+    expect(screen.getByLabelText('Responsável')).toBeDisabled();
+
+    post.release(json(detail({ status: 'IN_PROGRESS', allowedTransitions: ['RESOLVED'] })));
+
+    await waitFor(() => expect(screen.getByLabelText('Prioridade')).toBeEnabled());
+    expect(screen.getByLabelText('Responsável')).toBeEnabled();
+  });
+
+  it('PATCH de prioridade pendente trava os botões de status até a resposta', async () => {
+    const patch = pending();
+    stubApi(
+      AGENT,
+      routesFor(detail({ allowedTransitions: ['RESOLVED'] }), {
+        [`PATCH /tickets/${TICKET_ID}`]: patch.handler,
+      }),
+    );
+    await renderAt(`/tickets/${TICKET_ID}`);
+
+    fireEvent.change(await screen.findByLabelText('Prioridade'), { target: { value: 'URGENT' } });
+
+    const resolve = screen.getByRole('button', { name: 'Marcar como resolvido' });
+    await waitFor(() => expect(resolve).toBeDisabled());
+
+    patch.release(json(detail({ priority: 'URGENT', allowedTransitions: ['RESOLVED'] })));
+
+    expect(await screen.findByText('Prioridade alterada para Urgente.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Marcar como resolvido' })).toBeEnabled();
+  });
+
   it('só o admin troca o responsável; agente indisponível aparece marcado', async () => {
     stubApi(
       ADMIN,

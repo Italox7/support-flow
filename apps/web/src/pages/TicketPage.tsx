@@ -6,7 +6,7 @@ import {
   type TicketDetail,
   type TicketStatus,
 } from '@support-flow/shared';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState, type FormEvent } from 'react';
 import { useParams } from 'react-router';
 import { TextAreaField } from '../components/Fields';
@@ -200,6 +200,7 @@ function StaffControls({
     enabled: isAdmin,
   });
   const mutation = useMutation({
+    mutationKey: keys.ticketWrite(user, ticket.id),
     mutationFn: (patch: { priority?: Priority; assigneeId?: string }) =>
       api<TicketDetail>(`/tickets/${ticket.id}`, { method: 'PATCH', body: patch }),
     onSuccess: (updated, patch) =>
@@ -211,6 +212,8 @@ function StaffControls({
       ),
     onError,
   });
+  // Inclui a transição de status: a resposta que chegasse por último gravaria um ticket velho.
+  const busy = useIsMutating({ mutationKey: keys.ticketWrite(user, ticket.id) }) > 0;
   const lockReason = priorityLockReason(ticket.status);
 
   return (
@@ -223,7 +226,7 @@ function StaffControls({
           id="ticket-priority"
           className="input"
           value={ticket.priority}
-          disabled={Boolean(lockReason) || mutation.isPending}
+          disabled={Boolean(lockReason) || busy}
           aria-describedby={lockReason ? 'ticket-priority-lock' : undefined}
           onChange={(e) => mutation.mutate({ priority: e.target.value as Priority })}
         >
@@ -248,7 +251,7 @@ function StaffControls({
             id="ticket-assignee"
             className="input"
             value={ticket.assignee?.id ?? ''}
-            disabled={ticket.status === 'CLOSED' || mutation.isPending || !agents.data}
+            disabled={ticket.status === 'CLOSED' || busy || !agents.data}
             onChange={(e) => mutation.mutate({ assigneeId: e.target.value })}
           >
             {!ticket.assignee && <option value="">Sem responsável</option>}
@@ -286,6 +289,7 @@ function TicketContent({ id, user }: { id: string; user: AuthUser }) {
   });
 
   const transition = useMutation({
+    mutationKey: keys.ticketWrite(user, id),
     mutationFn: (to: TicketStatus) =>
       api<TicketDetail>(`/tickets/${id}/transitions`, { method: 'POST', body: { to } }),
     onSuccess: (updated) => {
@@ -320,6 +324,8 @@ function TicketContent({ id, user }: { id: string; user: AuthUser }) {
       }
     },
   });
+  // Transição ou PATCH dos StaffControls pendente: as duas gravam o ticket inteiro no cache.
+  const writing = useIsMutating({ mutationKey: keys.ticketWrite(user, id) }) > 0;
 
   if (ticketQuery.isPending) {
     return (
@@ -438,7 +444,7 @@ function TicketContent({ id, user }: { id: string; user: AuthUser }) {
                 key={to}
                 type="button"
                 className="btn"
-                disabled={transition.isPending}
+                disabled={writing}
                 onClick={() => transition.mutate(to)}
               >
                 {transitionLabel(ticket.status, to)}
