@@ -25,7 +25,9 @@ export type SessionState =
   /** A API não respondeu ao abrir: a sessão pode estar válida, então não é anônimo. */
   | { status: 'unavailable'; error: ApiError }
   | { status: 'authenticated'; user: AuthUser }
-  | { status: 'anonymous'; reason: 'none' | 'expired' | 'logged-out' };
+  | { status: 'anonymous'; reason: 'none' | 'logged-out' }
+  /** `userId` é de quem saiu: o destino guardado só vale para a mesma pessoa. */
+  | { status: 'anonymous'; reason: 'expired'; userId: string };
 
 export interface SessionChannel {
   postMessage(message: unknown): void;
@@ -176,10 +178,14 @@ export class Session {
   }
 
   private endSession(): void {
-    const wasAuthenticated = this.state.status === 'authenticated';
+    const userId = this.getUserId();
     this.accessToken = null;
-    this.setState({ status: 'anonymous', reason: wasAuthenticated ? 'expired' : 'none' });
-    if (wasAuthenticated) this.notify('session-ended');
+    this.setState(
+      userId
+        ? { status: 'anonymous', reason: 'expired', userId }
+        : { status: 'anonymous', reason: 'none' },
+    );
+    if (userId) this.notify('session-ended');
   }
 
   private handleNotice(data: unknown): void {
@@ -192,7 +198,7 @@ export class Session {
       case 'session-ended':
         if (this.state.status === 'authenticated') {
           this.accessToken = null;
-          this.setState({ status: 'anonymous', reason: 'expired' });
+          this.setState({ status: 'anonymous', reason: 'expired', userId: this.state.user.id });
         }
         return;
       case 'user-changed':

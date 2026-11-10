@@ -17,6 +17,12 @@ function Centered({ children }: { children: ReactNode }) {
   return <main className="mx-auto max-w-xl px-4 py-10">{children}</main>;
 }
 
+/** O que /entrar recebe: o destino e, se a sessão expirou, de quem ela era. */
+interface RedirectState {
+  from?: string;
+  owner?: string;
+}
+
 /** Guarda das rotas logadas; só a expiração guarda o destino, para voltar a ele depois. */
 function RequireAuth() {
   const state = useSession();
@@ -40,7 +46,8 @@ function RequireAuth() {
       );
     case 'anonymous': {
       const from = state.reason === 'logged-out' ? undefined : location.pathname + location.search;
-      return <Navigate to="/entrar" replace state={{ from }} />;
+      const owner = state.reason === 'expired' ? state.userId : undefined;
+      return <Navigate to="/entrar" replace state={{ from, owner } satisfies RedirectState} />;
     }
     case 'authenticated':
       return (
@@ -73,8 +80,11 @@ function PublicOnly() {
     );
   }
   if (state.status === 'authenticated') {
-    const from = (location.state as { from?: unknown } | null)?.from;
-    return <Navigate to={safeRedirect(from)} replace />;
+    const saved = location.state as { from?: unknown; owner?: unknown } | null;
+    // Destino de uma sessão que expirou só serve a quem era dono dela: outra
+    // pessoa entrando aqui, ou em outra aba, vai para a própria tela inicial.
+    const mine = saved?.owner === undefined || saved.owner === state.user.id;
+    return <Navigate to={mine ? safeRedirect(saved?.from) : '/'} replace />;
   }
   return (
     <Centered>
