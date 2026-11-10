@@ -57,16 +57,16 @@ A guarda `check-deploy-env` lista só os nomes das variáveis inválidas, nunca 
 
 ## Medições, com o link ainda não publicado
 
-| #   | Como                                                                                           | Esperado                                                                                             |
-| --- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| M1  | Pela Vercel, depois de 20 min parado, 3 vezes                                                  | JSON em até 100 s                                                                                    |
-| M2  | 6 logins errados de uma rede, 1 de outra, com `X-Forwarded-For` forjado                        | O 6º da primeira rede leva 429; a outra não é afetada; o XFF forjado escapa (risco aceito)           |
-| M3  | 30 `POST /api/tickets` simultâneos                                                             | Só 201, 429 ou 503 com `code`; `live` abaixo de 5 s                                                  |
-| M4  | `curl -i` pela Vercel                                                                          | `Retry-After`, corpo do 503 e `Set-Cookie` intactos; sem cache                                       |
-| M5  | 5 logins simultâneos                                                                           | Abaixo de 512 MB, sem reinício                                                                       |
-| M6  | Cron com a API fria e com segredo errado                                                       | O primeiro passa; o segundo falha e chega e-mail; o `dev` fica idêntico                              |
-| M7  | 10 logins certos em sequência, um de cada vez, com `curl -w '%{time_total}'` (API já acordada) | Mediana do tempo anotada no resultado. Acima de 1 s, o Perry revê as vagas do argon2 (`password.ts`) |
-| M8  | 11 logins errados com um e-mail que não é da demo, de redes diferentes                         | Do 1º ao 10º, 401; o 11º, 429 com `Retry-After` perto de 900; conta da demo nunca leva 429           |
+| #   | Como                                                                                                                                       | Esperado                                                                                                                                                     |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| M1  | Pela Vercel, depois de 20 min parado, 3 vezes                                                                                              | JSON em até 100 s                                                                                                                                            |
+| M2  | 6 logins errados de uma rede, 1 de outra, com `X-Forwarded-For` forjado                                                                    | O 6º da primeira rede leva 429; a outra não é afetada; o XFF forjado escapa (risco aceito)                                                                   |
+| M3  | 30 `POST /api/tickets` simultâneos                                                                                                         | Só 201, 429 ou 503 com `code`; `live` abaixo de 5 s                                                                                                          |
+| M4  | `curl -i` pela Vercel                                                                                                                      | `Retry-After`, corpo do 503 e `Set-Cookie` intactos; sem cache                                                                                               |
+| M5  | 5 logins simultâneos                                                                                                                       | Abaixo de 512 MB, sem reinício                                                                                                                               |
+| M6  | Cron com a API fria e com segredo errado                                                                                                   | O primeiro passa; o segundo falha e chega e-mail; o `dev` fica idêntico                                                                                      |
+| M7  | 10 logins certos em sequência, 15 s entre eles (limite de 5/min por IP), com `curl -w '%{time_total}'` e um `live` antes (API já acordada) | Mediana anotada no resultado. O verify não tem log de duração: estimar por login menos `live`. Acima de 1 s, o Perry revê as vagas do argon2 (`password.ts`) |
+| M8  | 11 logins errados com um e-mail que não é da demo, de uma rede só, 15 s entre eles (limite de 5/min por IP)                                | Do 1º ao 10º, 401; o 11º, 429 com `Retry-After` ≤ 900 (a janela conta desde a 1ª falha); conta da demo nunca leva 429                                        |
 
 ### Resultado do primeiro deploy (2026-11-08)
 
@@ -80,6 +80,13 @@ A guarda `check-deploy-env` lista só os nomes das variáveis inválidas, nunca 
 | M6       | Cron a frio verde e `dev` idêntico antes e depois (contagem e md5 de 5 tabelas); segredo errado = 401                                     |
 | Rollback | Render ida e volta em 41 s cada; Vercel imediato; login e escrita funcionaram nos dois                                                    |
 | CSP      | Console sem violação em login, lista, ticket, comentário e saída                                                                          |
+
+### Resultado do segundo deploy (2026-11-10, limite de login e fila do argon2)
+
+| #   | Resultado                                                                                                                                                                                                                                                                     |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M7  | 10 logins certos, 15 s entre eles, todos 200: mediana 0,709 s (0,659 a 0,913); `live` sem banco 0,691 s (1 amostra). Do Rio, o RTT até Virginia domina; o verify some no ruído (< ~0,25 s no pior caso). Vagas mantidas em 2, fila 8, espera 3 s (Perry)                      |
+| M8  | 10 errados com e-mail inexistente = 401; o 11º = 429, `Retry-After` 719 (janela de 15 min já com ~3 min gastos), `x-ratelimit-remaining` 2 (limite por e-mail, não o do IP); `login_locked` 1 vez; 11 errados na conta da demo = todos 401; `password_hash_busy` não apareceu |
 
 ## Rollback
 

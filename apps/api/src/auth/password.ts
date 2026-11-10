@@ -101,12 +101,16 @@ export function createPasswordGate({ permits, maxQueue, maxWaitMs }: PasswordGat
 }
 
 /**
- * Números do Perry (2026-11-09), medidos local e extrapolados ao Render free
- * (~0,1 vCPU, 512 MB): ~35 ms de CPU e ~19 MiB por hash. Duas vagas custam
- * ~38 MiB e deixam duas das quatro threads do libuv livres; mais vagas não
- * rendem vazão com CPU fracionada, só empilham latência. Fila de 8 com espera de
- * 3 s: perto do que duas vagas escoam nesse tempo. Rever com a duração real do
- * verify medida no Render (se passar de 1 s, cair para 1 vaga).
+ * Números do Perry (2026-11-10). Local: ~30–35 ms e ~19 MiB nativos por hash.
+ * No Render free (~0,1 vCPU, 512 MB), em produção (M7 do runbook): login
+ * sequencial com mediana de 0,709 s contra 0,691 s do /live; o RTT
+ * Brasil→Virginia domina e o verify não se separa do ruído (< ~0,25 s). Rajada
+ * de 5 logins (M5): 1,5 a 1,9 s, todos 200 (CPU fracionada limitando a vazão é
+ * hipótese, não medida). Duas vagas custam ~38 MiB e deixam duas das quatro
+ * threads do libuv livres; mais vagas não rendem vazão. Fila de 8 com espera de
+ * 3 s: perto do que as vagas escoam; se não escoar, 503 rápido. Rever se
+ * password_hash_busy aparecer em uso real: medir o verify no servidor (log de
+ * duração) e, se passar de 1 s, cair para 1 vaga.
  * Exportado só para os E2E ocuparem as vagas; o código chama hashPassword/verifyPassword.
  */
 export const PASSWORD_GATE_LIMITS: PasswordGateOptions = {
