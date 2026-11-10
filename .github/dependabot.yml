@@ -4,6 +4,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Versão nova só vira PR depois de 7 dias publicada: pacote comprometido costuma ser retirado
+    # antes disso. Não atrasa as atualizações de segurança do Dependabot.
+    cooldown:
+      default-days: 7
     groups:
       minor-and-patch:
         update-types: [minor, patch]
@@ -19,3 +23,5 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 3

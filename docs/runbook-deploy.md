@@ -108,7 +108,10 @@ A guarda `check-deploy-env` lista só os nomes das variáveis inválidas, nunca 
 
 - **Lembrete mensal**: o GitHub desliga agendamentos após 60 dias sem atividade no repositório, e o
   Supabase pausa projetos gratuitos parados. Confira se **Jobs diários** segue rodando e reative
-  se for preciso.
+  se for preciso. Nos logs do Render do mês, busque `password_hash_busy` e `login_locked`: são os
+  gatilhos do "Revisitar quando" do limite de login em `docs/decisions.md`. `password_hash_busy` fora
+  de rajada isolada pede nova medição (M7) com o Perry; `login_locked` frequente ou num mesmo e-mail
+  pode ser tentativa de adivinhar senha, e vale avisar o Gard.
 - **Falha do job**: o GitHub avisa por e-mail. 401 é `JOBS_SECRET` diferente nos dois lados; 503 é o
   lock ocupado ou o banco fora, e pode ser repetido (a restauração e o fechamento podem já ter rodado).
   `restored` falso também falha o job: confira `DEMO_RESET_ENABLED` e o `schema` da URL.

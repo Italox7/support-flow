@@ -30,6 +30,7 @@ schema `dev` do projeto Supabase; a demo pública usa o schema `public`.
 
 ```bash
 npm install
+npm run setup   # build do shared + prisma generate (o .npmrc desliga os scripts de instalação)
 cp apps/api/.env.example apps/api/.env   # preencha DATABASE_URL e DIRECT_URL
 npm run db:deploy -w @support-flow/api   # aplica as migrations no schema dev
 
@@ -45,4 +46,5 @@ npm run dev:web   # http://localhost:5173
 | `npm run typecheck`                       | TypeScript em todos os workspaces                   |
 | `npm test`                                | Vitest (API e front)                                |
 | `npm run build`                           | Build de shared, API e front                        |
+| `npm run setup`                           | Build do shared e `prisma generate`, após instalar  |
 | `npm run db:migrate -w @support-flow/api` | Cria uma nova migration a partir do `schema.prisma` |
