@@ -296,20 +296,25 @@ function TicketContent({ id, user }: { id: string; user: AuthUser }) {
       setNotice(`Status alterado para ${statusLabel(updated.status, user.role)}.`);
       statusRef.current?.focus({ preventScroll: true });
     },
-    onError: (failure) => {
+    onError: async (failure) => {
       if (session.getUserId() !== user.id) return;
       const { status } = toApiError(failure);
       // A lista de ações estava defasada: recarrega e explica por que os botões mudaram.
       if (status === 403 || status === 409) {
-        void ticketQuery.refetch();
         const reason =
           status === 403
             ? 'Você não pode mais fazer essa ação neste ticket.'
             : describeError(failure);
-        setActionError({
-          message: `${reason} Atualizamos as ações disponíveis.`,
-          canReload: false,
-        });
+        // A mutação segue pendente até aqui: os botões vencidos ficam travados durante a leitura.
+        const fresh = await ticketQuery.refetch();
+        // Outra pessoa entrou durante a leitura: o aviso era de quem saiu.
+        if (session.getUserId() !== user.id) return;
+        // refetch não lança: falha volta como isError, e aí as ações na tela ainda são as velhas.
+        setActionError(
+          fresh.isError
+            ? { message: `${reason} Não foi possível atualizar as ações agora.`, canReload: true }
+            : { message: `${reason} Atualizamos as ações disponíveis.`, canReload: false },
+        );
       } else {
         setActionError({ message: describeError(failure), canReload: false });
       }
