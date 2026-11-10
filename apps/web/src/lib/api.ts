@@ -83,7 +83,7 @@ export async function api<T>(
       if (res.ok) return payload as T;
 
       const delay = busyRetryDelay(res, payload);
-      if (delay === null || attempt >= MAX_ATTEMPTS) throw new ApiError(res.status, payload);
+      if (delay === null || attempt >= MAX_ATTEMPTS) throw ApiError.fromResponse(res, payload);
       attempt += 1;
       const current = attempt;
       busyListeners.forEach((listener) => listener(current));

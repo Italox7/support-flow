@@ -6,6 +6,7 @@ import { ENV, type Env } from '../config/env.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { JwtAuthGuard } from './jwt-auth.guard.js';
+import { LoginAttempts } from './login-attempts.js';
 import { RefreshTokensService } from './refresh-tokens.service.js';
 import { RolesGuard } from './roles.guard.js';
 
@@ -29,6 +30,7 @@ const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
   providers: [
     AuthService,
     RefreshTokensService,
+    LoginAttempts,
     // A ordem importa: o rate limit vem antes de qualquer trabalho, e o
     // RolesGuard lê o usuário que o JwtAuthGuard anexa. Com `useExisting`, os
     // testes trocam o ThrottlerGuard por overrideProvider (overrideGuard não alcança).

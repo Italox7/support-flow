@@ -34,6 +34,19 @@ describe('api', () => {
     vi.unstubAllGlobals();
   });
 
+  it('não repete o 503 do hash de senha, mesmo com Retry-After', async () => {
+    const fetch = await withRoutes(() =>
+      json({ code: 'PASSWORD_HASH_BUSY' }, 503, { 'Retry-After': '2' }),
+    );
+
+    await expect(api('/users/agents', { method: 'POST', body: {} })).rejects.toMatchObject({
+      status: 503,
+      code: 'PASSWORD_HASH_BUSY',
+      retryAfterSeconds: 2,
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it('manda o token e devolve o corpo', async () => {
     const fetch = await withRoutes(() => json({ ok: true }));
 

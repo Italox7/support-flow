@@ -1,15 +1,19 @@
 import {
   ConflictException,
+  Inject,
   Injectable,
   UnauthorizedException,
   type OnModuleInit,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import type { AuthResponse, AuthUser } from '@support-flow/shared';
+import { ENV, type Env } from '../config/env.js';
 import { Prisma, type User } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { LoginDto, RegisterDto } from './auth.dto.js';
 import type { AccessTokenPayload } from './auth.types.js';
+import { DEMO_EMAILS as DEMO_EMAIL_BY_ROLE } from './demo-emails.js';
+import { LoginAttempts, LoginLockedException } from './login-attempts.js';
 import { hashPassword, verifyPassword } from './password.js';
 import { RefreshTokensService } from './refresh-tokens.service.js';
 
@@ -17,6 +21,14 @@ import { RefreshTokensService } from './refresh-tokens.service.js';
 export interface Session extends AuthResponse {
   refreshToken: string;
 }
+
+/**
+ * Contas da demo, fora do limite por e-mail quando a demo está ligada: a senha
+ * delas é pública, então o limite não protege nada e só deixaria alguém travar a
+ * demo para os visitantes. A lista também é pública: isentá-la não revela nada.
+ * Sai da constante, nunca do papel lido no banco.
+ */
+const DEMO_EMAILS: ReadonlySet<string> = new Set(Object.values(DEMO_EMAIL_BY_ROLE));
 
 @Injectable()
 export class AuthService implements OnModuleInit {
@@ -30,6 +42,8 @@ export class AuthService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly refreshTokens: RefreshTokensService,
+    private readonly attempts: LoginAttempts,
+    @Inject(ENV) private readonly env: Pick<Env, 'DEMO_RESET_ENABLED'>,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -53,10 +67,29 @@ export class AuthService implements OnModuleInit {
     return this.startSession(user);
   }
 
+  /**
+   * A reserva da falha vem antes do banco e do argon2: bloqueado, responde 429
+   * rápido e igual para e-mail existente e inexistente. Só a senha errada confirma
+   * a falha; o sucesso e qualquer outro erro (fila cheia, banco) devolvem a vaga.
+   */
   async login(dto: LoginDto): Promise<Session> {
-    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
-    const valid = await verifyPassword(user?.passwordHash ?? this.dummyHash, dto.password);
-    if (!user || !valid) throw new UnauthorizedException('E-mail ou senha inválidos.');
+    const exempt = this.env.DEMO_RESET_ENABLED && DEMO_EMAILS.has(dto.email);
+    const reservation = exempt ? null : this.attempts.reserve(dto.email);
+    if (reservation && !reservation.ok) throw new LoginLockedException(reservation.retryAfterSec);
+    let user: User | null;
+    try {
+      user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+      const valid = await verifyPassword(user?.passwordHash ?? this.dummyHash, dto.password);
+      if (!user || !valid) user = null;
+    } catch (error) {
+      reservation?.release();
+      throw error;
+    }
+    if (!user) {
+      reservation?.fail();
+      throw new UnauthorizedException('E-mail ou senha inválidos.');
+    }
+    reservation?.release();
     return this.startSession(user);
   }
 

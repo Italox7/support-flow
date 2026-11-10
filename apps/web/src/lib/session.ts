@@ -117,7 +117,7 @@ export class Session {
     try {
       await this.withLock(async () => {
         const res = await this.post('logout');
-        if (!res.ok) throw new ApiError(res.status, await readBody(res));
+        if (!res.ok) throw ApiError.fromResponse(res, await readBody(res));
         this.accessToken = null;
         this.setState({ status: 'anonymous', reason: 'logged-out' });
         this.notify('logged-out');
@@ -135,7 +135,7 @@ export class Session {
           throw new ApiError(0, null, true);
         });
         const payload = await readBody(res);
-        if (!res.ok) throw new ApiError(res.status, payload);
+        if (!res.ok) throw ApiError.fromResponse(res, payload);
         const user = this.adopt(parseAuthResponse(payload));
         this.notify('user-changed');
         return user;
@@ -159,7 +159,7 @@ export class Session {
           this.endSession();
           throw new ApiError(401, payload);
         }
-        if (!res.ok) throw new ApiError(res.status, payload);
+        if (!res.ok) throw ApiError.fromResponse(res, payload);
         const auth = parseAuthResponse(payload);
         this.adopt(auth);
         return auth.accessToken;

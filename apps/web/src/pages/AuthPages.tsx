@@ -55,7 +55,11 @@ export function LoginPage() {
         setErrors(found);
         if (Object.keys(found).length === 0) setFormError(describeError(error));
       } else {
-        setFormError(status === 401 ? 'E-mail ou senha incorretos.' : describeError(error));
+        setFormError(
+          status === 401
+            ? 'E-mail ou senha incorretos.'
+            : describeError(error, { action: 'login' }),
+        );
       }
       setPending(false);
     }

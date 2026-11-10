@@ -38,15 +38,15 @@ export class DemoResetService {
       return false;
     }
 
-    // Antes da transação: o argon2 não pode segurar o lock nem uma conexão.
-    const users: Prisma.UserCreateManyInput[] = [];
-    for (const account of DEMO_ACCOUNTS) {
-      users.push({
-        ...account,
-        passwordHash: await hashPassword(DEMO_PASSWORD),
-        isAvailable: account.role === 'AGENT',
-      });
-    }
+    // Antes da transação: o argon2 não pode segurar o lock nem uma conexão. Um
+    // hash só para as três contas (a senha é a mesma e pública), com prioridade
+    // na fila do argon2: uma rajada de logins não derruba a restauração.
+    const passwordHash = await hashPassword(DEMO_PASSWORD, { priority: true });
+    const users: Prisma.UserCreateManyInput[] = DEMO_ACCOUNTS.map((account) => ({
+      ...account,
+      passwordHash,
+      isAvailable: account.role === 'AGENT',
+    }));
 
     await this.assignment.inLock(async (tx) => {
       const now = new Date();

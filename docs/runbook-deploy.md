@@ -57,14 +57,16 @@ A guarda `check-deploy-env` lista só os nomes das variáveis inválidas, nunca 
 
 ## Medições, com o link ainda não publicado
 
-| #   | Como                                                                    | Esperado                                                                                   |
-| --- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| M1  | Pela Vercel, depois de 20 min parado, 3 vezes                           | JSON em até 100 s                                                                          |
-| M2  | 6 logins errados de uma rede, 1 de outra, com `X-Forwarded-For` forjado | O 6º da primeira rede leva 429; a outra não é afetada; o XFF forjado escapa (risco aceito) |
-| M3  | 30 `POST /api/tickets` simultâneos                                      | Só 201, 429 ou 503 com `code`; `live` abaixo de 5 s                                        |
-| M4  | `curl -i` pela Vercel                                                   | `Retry-After`, corpo do 503 e `Set-Cookie` intactos; sem cache                             |
-| M5  | 5 logins simultâneos                                                    | Abaixo de 512 MB, sem reinício                                                             |
-| M6  | Cron com a API fria e com segredo errado                                | O primeiro passa; o segundo falha e chega e-mail; o `dev` fica idêntico                    |
+| #   | Como                                                                                           | Esperado                                                                                             |
+| --- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| M1  | Pela Vercel, depois de 20 min parado, 3 vezes                                                  | JSON em até 100 s                                                                                    |
+| M2  | 6 logins errados de uma rede, 1 de outra, com `X-Forwarded-For` forjado                        | O 6º da primeira rede leva 429; a outra não é afetada; o XFF forjado escapa (risco aceito)           |
+| M3  | 30 `POST /api/tickets` simultâneos                                                             | Só 201, 429 ou 503 com `code`; `live` abaixo de 5 s                                                  |
+| M4  | `curl -i` pela Vercel                                                                          | `Retry-After`, corpo do 503 e `Set-Cookie` intactos; sem cache                                       |
+| M5  | 5 logins simultâneos                                                                           | Abaixo de 512 MB, sem reinício                                                                       |
+| M6  | Cron com a API fria e com segredo errado                                                       | O primeiro passa; o segundo falha e chega e-mail; o `dev` fica idêntico                              |
+| M7  | 10 logins certos em sequência, um de cada vez, com `curl -w '%{time_total}'` (API já acordada) | Mediana do tempo anotada no resultado. Acima de 1 s, o Perry revê as vagas do argon2 (`password.ts`) |
+| M8  | 11 logins errados com um e-mail que não é da demo, de redes diferentes                         | Do 1º ao 10º, 401; o 11º, 429 com `Retry-After` perto de 900; conta da demo nunca leva 429           |
 
 ### Resultado do primeiro deploy (2026-11-08)
 
@@ -103,4 +105,8 @@ A guarda `check-deploy-env` lista só os nomes das variáveis inválidas, nunca 
 - **Falha do job**: o GitHub avisa por e-mail. 401 é `JOBS_SECRET` diferente nos dois lados; 503 é o
   lock ocupado ou o banco fora, e pode ser repetido (a restauração e o fechamento podem já ter rodado).
   `restored` falso também falha o job: confira `DEMO_RESET_ENABLED` e o `schema` da URL.
+- **503 com `code: 'PASSWORD_HASH_BUSY'`**: a fila do hash de senha encheu (log `password_hash_busy`),
+  e nada foi gravado. Passageiro numa rajada; se for frequente, medir de novo (M7) com o Perry antes
+  de mexer nas vagas. **429 no login com `Retry-After` alto** é o limite de 10 falhas por e-mail em
+  15 min (log `login_locked`): espera a janela, sem ação manual.
 - **Trocar a senha pública**: alterar `DEMO_PASSWORD` no Render e rodar o workflow.

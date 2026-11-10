@@ -6,6 +6,7 @@ import type { Role } from '@support-flow/shared';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
 import type { AccessTokenPayload } from '../src/auth/auth.types.js';
+import { PASSWORD_GATE_LIMITS, passwordGate } from '../src/auth/password.js';
 import { GlobalRegisterLimitGuard, UserRateLimitGuard } from '../src/auth/rate-limit.guards.js';
 import { ENV, loadEnv, type Env } from '../src/config/env.js';
 import type { Prisma } from '../src/generated/prisma/client.js';
@@ -110,4 +111,23 @@ export function withSlaClock(data: Prisma.TicketUpdateInput): Prisma.TicketUpdat
   if (typeof data.status !== 'string' || data.slaPausedAt !== undefined) return data;
   const running = SLA_RUNNING_STATUSES.includes(data.status);
   return { ...data, slaPausedAt: running ? null : new Date() };
+}
+
+/**
+ * Ocupa todas as vagas e a fila do argon2 (o app roda neste mesmo processo), para
+ * a próxima chamada levar o 503. Quem fica na fila desiste em `maxWaitMs`; depois
+ * disso a requisição do teste entra na fila e leva o 503 pelo timeout, também
+ * válido, só mais lento. Devolve a função que libera tudo.
+ */
+export function fillPasswordGate(): () => Promise<void> {
+  let open!: () => void;
+  const blocker = new Promise<void>((resolve) => (open = resolve));
+  const { permits, maxQueue } = PASSWORD_GATE_LIMITS;
+  const held = Array.from({ length: permits + maxQueue }, () =>
+    passwordGate.run(() => blocker).catch(() => undefined),
+  );
+  return async () => {
+    open();
+    await Promise.all(held);
+  };
 }

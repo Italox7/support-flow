@@ -3,10 +3,12 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { inspect } from 'node:util';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PASSWORD_HASH_BUSY_CODE } from '@support-flow/shared';
 import { PrismaService } from '../src/prisma/prisma.service.js';
 import {
   createActor,
   createApp,
+  fillPasswordGate,
   resetDatabase,
   TEST_DATABASE_URL,
   type Actor,
@@ -41,6 +43,18 @@ describe.skipIf(!TEST_DATABASE_URL)('criação de agentes (e2e)', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('com a fila do argon2 cheia, 503 com o code e nada gravado', async () => {
+    const release = fillPasswordGate();
+    try {
+      const res = await create(admin).expect(503);
+      expect(res.headers['retry-after']).toBe('2');
+      expect(res.body.code).toBe(PASSWORD_HASH_BUSY_CODE);
+    } finally {
+      await release();
+    }
+    expect(await prisma.user.count({ where: { email: VALID.email } })).toBe(0);
   });
 
   it('o admin cria o agente; a resposta não traz senha nem hash', async () => {

@@ -1,16 +1,37 @@
+import { PASSWORD_HASH_BUSY_CODE } from '@support-flow/shared';
+
 /** Erro de uma chamada à API. `status` 0: a resposta não chegou (rede ou tempo esgotado). */
 export class ApiError extends Error {
   readonly status: number;
   readonly body: unknown;
   /** Uma escrita sem resposta pode ter sido gravada: repetir pode duplicar. */
   readonly uncertain: boolean;
+  /** `Retry-After` em segundos, quando a resposta trouxe um válido. */
+  readonly retryAfterSeconds: number | null;
 
-  constructor(status: number, body: unknown = null, uncertain = false) {
+  constructor(
+    status: number,
+    body: unknown = null,
+    uncertain = false,
+    retryAfterSeconds: number | null = null,
+  ) {
     super(`Falha na API (${status})`);
     this.name = 'ApiError';
     this.status = status;
     this.body = body;
     this.uncertain = uncertain;
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+
+  static fromResponse(res: Response, body: unknown): ApiError {
+    const header = res.headers.get('Retry-After') ?? '';
+    const seconds = /^\d+$/.test(header) ? Number(header) : null;
+    return new ApiError(res.status, body, false, seconds);
+  }
+
+  get code(): string | null {
+    const code = (this.body as { code?: unknown } | null)?.code;
+    return typeof code === 'string' ? code : null;
   }
 
   /** `message` do Nest: string nas regras do serviço, lista na validação dos campos. */
@@ -38,7 +59,22 @@ export function toApiError(error: unknown, uncertain = false): ApiError {
   return error instanceof ApiError ? error : new ApiError(0, null, uncertain);
 }
 
-export function describeError(error: unknown): string {
+/**
+ * "cerca de N minutos", a partir do Retry-After, calculado uma vez no erro: um
+ * contador vivo seria repetido pelo leitor de tela. Sem o número exato, que
+ * revelaria o limite.
+ */
+function waitText(seconds: number | null): string {
+  if (seconds === null) return 'alguns minutos';
+  const minutes = Math.max(1, Math.ceil(seconds / 60));
+  return minutes === 1 ? 'cerca de 1 minuto' : `cerca de ${minutes} minutos`;
+}
+
+/**
+ * `login`: o 429 fala de tentativas de entrada, sem sugerir que a conta existe
+ * nem que foi bloqueada, e o 503 do hash não fala em "salvo".
+ */
+export function describeError(error: unknown, { action }: { action?: 'login' } = {}): string {
   const apiError = toApiError(error);
   const message = apiError.apiMessage;
   switch (apiError.status) {
@@ -59,10 +95,19 @@ export function describeError(error: unknown): string {
       return typeof message === 'string'
         ? message
         : 'Os dados mudaram enquanto isso. Recarregue e tente de novo.';
-    case 429:
-      return 'Muitas tentativas. Aguarde um minuto e tente de novo.';
+    case 429: {
+      const wait = waitText(apiError.retryAfterSeconds);
+      return action === 'login'
+        ? `Muitas tentativas de entrada. Aguarde ${wait} e tente de novo.`
+        : `Muitas tentativas. Aguarde ${wait} e tente de novo.`;
+    }
     case 503:
-      return 'O sistema está ocupado. Tente de novo em instantes.';
+      if (apiError.code !== PASSWORD_HASH_BUSY_CODE) {
+        return 'O sistema está ocupado. Tente de novo em instantes.';
+      }
+      return action === 'login'
+        ? 'O servidor está ocupado agora. Tente entrar de novo em alguns segundos.'
+        : 'O servidor está ocupado agora e não concluiu o pedido. Nada foi salvo. Tente de novo em alguns segundos.';
     default:
       return 'Algo deu errado do nosso lado. Tente de novo em instantes.';
   }
