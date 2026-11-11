@@ -357,8 +357,10 @@ function TicketContent({ id, user }: { id: string; user: AuthUser }) {
     );
   }
   if (ticketQuery.isError && !ticketQuery.data) {
+    // O título é o que o leitor de tela anuncia ao focar o <h1>: igual ao do id malformado.
+    const notFound = toApiError(ticketQuery.error).status === 404;
     return (
-      <Page title="Ticket">
+      <Page title={notFound ? 'Ticket não encontrado' : 'Ticket'}>
         <QueryError error={ticketQuery.error} onRetry={() => void ticketQuery.refetch()} />
       </Page>
     );
