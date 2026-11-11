@@ -481,6 +481,8 @@ describe('ticket', () => {
     await renderAt(`/tickets/${TICKET_ID}`);
 
     expect(await screen.findByText('Ticket ou página não encontrados.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Ticket não encontrado');
+    expect(document.title).toBe('Ticket não encontrado | Support Flow');
   });
 
   it('id malformado é não encontrado, sem chamar a API', async () => {
@@ -488,6 +490,8 @@ describe('ticket', () => {
     await renderAt('/tickets/abc');
 
     expect(await screen.findByText('Ticket ou página não encontrados.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Ticket não encontrado');
+    expect(document.title).toBe('Ticket não encontrado | Support Flow');
     expect(calls.some(({ key }) => key.startsWith('GET /tickets'))).toBe(false);
   });
 
