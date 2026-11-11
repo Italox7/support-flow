@@ -21,6 +21,7 @@ import { PRIORITY_LABELS, statusLabel, transitionLabel } from '../lib/labels';
 import { keys, REFETCH_MS } from '../lib/queries';
 import { session } from '../lib/session';
 import { useUser } from '../lib/useSession';
+import { useSlow, WAKING_MESSAGE } from '../lib/useSlow';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const REOPEN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -84,6 +85,8 @@ function CommentForm({
   const { text } = draft;
   const [emptyError, setEmptyError] = useState<string | undefined>();
   const [error, setError] = useState<ActionError | null>(null);
+  // O POST já respondeu e a mutação só segue pendente pela recarga: o botão não diz "Enviando…".
+  const [sent, setSent] = useState(false);
   const isStaff = user.role !== 'CUSTOMER';
   const isInternal = isStaff && draft.isInternal;
 
@@ -104,7 +107,12 @@ function CommentForm({
       change({ text: '', isInternal });
       // Outra pessoa entrou durante o envio: buscar agora usaria o token dela na chave de A.
       if (session.getUserId() !== user.id) return;
-      await onSent();
+      setSent(true);
+      try {
+        await onSent();
+      } finally {
+        setSent(false);
+      }
       field.current?.focus({ preventScroll: true });
     },
     onError: (failure) => {
@@ -155,7 +163,7 @@ function CommentForm({
         </label>
       )}
       <button type="submit" className="btn btn-primary" disabled={mutation.isPending}>
-        {mutation.isPending ? 'Enviando…' : 'Enviar'}
+        {mutation.isPending && !sent ? 'Enviando…' : 'Enviar'}
       </button>
     </form>
   );
@@ -276,6 +284,20 @@ function TicketContent({ id, user }: { id: string; user: AuthUser }) {
   const statusRef = useRef<HTMLParagraphElement>(null);
   const [notice, setNotice] = useState('');
   const [actionError, setActionError] = useState<ActionError | null>(null);
+  // Contador, não booleano: a recarga do comentário e a do botão Recarregar podem se sobrepor.
+  // `isFetching` não serve: o polling de REFETCH_MS também liga e anunciaria toda leitura de rotina.
+  const [refreshing, setRefreshing] = useState(0);
+  const slowRefresh = useSlow(refreshing > 0);
+
+  /** Recarga pedida pela pessoa: a leitura pode levar até um minuto e a tela diz que está esperando. */
+  const tracked = async <T,>(work: () => Promise<T>): Promise<T> => {
+    setRefreshing((n) => n + 1);
+    try {
+      return await work();
+    } finally {
+      setRefreshing((n) => n - 1);
+    }
+  };
 
   const ticketQuery = useQuery({
     queryKey: keys.ticket(user, id),
@@ -310,7 +332,7 @@ function TicketContent({ id, user }: { id: string; user: AuthUser }) {
             ? 'Você não pode mais fazer essa ação neste ticket.'
             : describeError(failure);
         // A mutação segue pendente até aqui: os botões vencidos ficam travados durante a leitura.
-        const fresh = await ticketQuery.refetch();
+        const fresh = await tracked(() => ticketQuery.refetch());
         // Outra pessoa entrou durante a leitura: o aviso era de quem saiu.
         if (session.getUserId() !== user.id) return;
         // refetch não lança: falha volta como isError, e aí as ações na tela ainda são as velhas.
@@ -345,13 +367,17 @@ function TicketContent({ id, user }: { id: string; user: AuthUser }) {
   const ticket = ticketQuery.data;
   const receivedAt = ticketQuery.dataUpdatedAt;
   const isStaff = user.role !== 'CUSTOMER';
+  // A mesma região de status de sempre: uma região nova que já nasce com texto costuma não ser lida.
+  const status = refreshing > 0 ? (slowRefresh ? WAKING_MESSAGE : 'Atualizando o ticket…') : notice;
 
   /**
    * Recarrega ticket e comentários. `refetch` não lança: falha volta como `isError` com o dado
    * velho, então quem chama decide o aviso pelo resultado. `null` = outra pessoa entrou no meio.
    */
   const refreshAll = async () => {
-    const [fresh, comments] = await Promise.all([ticketQuery.refetch(), commentsQuery.refetch()]);
+    const [fresh, comments] = await tracked(() =>
+      Promise.all([ticketQuery.refetch(), commentsQuery.refetch()]),
+    );
     if (session.getUserId() !== user.id) return null;
     return { fresh, ok: !fresh.isError && !comments.isError };
   };
@@ -392,8 +418,8 @@ function TicketContent({ id, user }: { id: string; user: AuthUser }) {
   return (
     <Page title={`#${ticket.number} ${ticket.title}`}>
       <StaleNotice failed={ticketQuery.isRefetchError} updatedAt={ticketQuery.dataUpdatedAt} />
-      <p role="status" className={notice ? 'rounded-md bg-slate-200 p-2' : 'sr-only'}>
-        {notice}
+      <p role="status" className={status ? 'rounded-md bg-slate-200 p-2' : 'sr-only'}>
+        {status}
       </p>
       {actionError && <ReloadableError error={actionError} onReload={() => void reload()} />}
 

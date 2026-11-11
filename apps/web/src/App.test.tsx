@@ -1133,6 +1133,98 @@ describe('espera', () => {
     ).toBeInTheDocument();
     expect(posts).toBe(2);
   });
+
+  /** 1ª leitura do ticket responde na hora; a 2ª só quando o teste chamar `release`. */
+  function slowSecondRead(body: () => TicketDetail) {
+    let reads = 0;
+    let release: () => void = () => undefined;
+    const route = () => {
+      reads += 1;
+      if (reads === 1) return json(body());
+      return new Promise<Response>((resolve) => {
+        release = () => resolve(json(body()));
+      }) as unknown as Response;
+    };
+    return { route, release: () => act(async () => release()) };
+  }
+
+  async function expectRefreshNotice() {
+    expect(await screen.findByText('Atualizando o ticket…')).toBeInTheDocument();
+    await act(() => vi.advanceTimersByTimeAsync(3_100));
+    expect(screen.getByText(/Acordando o servidor/)).toBeInTheDocument();
+  }
+
+  it('Recarregar ticket diz que está atualizando e, depois de ~3 s, que o servidor está acordando', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const slow = slowSecondRead(() => detail());
+    stubApi(CUSTOMER, {
+      [`GET /tickets/${TICKET_ID}`]: slow.route,
+      [`GET /tickets/${TICKET_ID}/comments`]: () => json([]),
+      [`POST /tickets/${TICKET_ID}/comments`]: () =>
+        json({ message: 'Ticket fechado não aceita comentários.' }, 409),
+    });
+    await renderAt(`/tickets/${TICKET_ID}`);
+
+    type(await screen.findByLabelText('Comentário'), 'Meu texto');
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Recarregar ticket' }));
+
+    await expectRefreshNotice();
+    await slow.release();
+
+    expect(await screen.findByText('Ticket atualizado.')).toBeInTheDocument();
+    expect(screen.queryByText(/Acordando o servidor/)).not.toBeInTheDocument();
+  });
+
+  it('transição recusada avisa enquanto recarrega as ações', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let first = true;
+    const slow = slowSecondRead(() => {
+      const allowed: TicketDetail['allowedTransitions'] = first ? ['RESOLVED'] : [];
+      first = false;
+      return detail({ allowedTransitions: allowed });
+    });
+    stubApi(AGENT, {
+      [`GET /tickets/${TICKET_ID}`]: slow.route,
+      [`GET /tickets/${TICKET_ID}/comments`]: () => json([]),
+      [`POST /tickets/${TICKET_ID}/transitions`]: () =>
+        json({ message: 'O ticket mudou enquanto isso.' }, 409),
+    });
+    await renderAt(`/tickets/${TICKET_ID}`);
+
+    const button = await screen.findByRole('button', { name: 'Marcar como resolvido' });
+    fireEvent.click(button);
+
+    await expectRefreshNotice();
+    expect(button).toBeDisabled();
+    await slow.release();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Atualizamos as ações disponíveis.');
+    expect(screen.queryByText(/Acordando o servidor/)).not.toBeInTheDocument();
+  });
+
+  it('comentário já gravado não diz Enviando… enquanto a tela recarrega', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const slow = slowSecondRead(() => detail());
+    stubApi(CUSTOMER, {
+      [`GET /tickets/${TICKET_ID}`]: slow.route,
+      [`GET /tickets/${TICKET_ID}/comments`]: () => json([]),
+      [`POST /tickets/${TICKET_ID}/comments`]: () => json({}, 201),
+    });
+    await renderAt(`/tickets/${TICKET_ID}`);
+
+    type(await screen.findByLabelText('Comentário'), 'Segue a resposta');
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar' }));
+
+    await expectRefreshNotice();
+    // Travado contra um 2º envio, mas sem dizer que ainda está enviando o que já foi gravado.
+    expect(screen.getByRole('button', { name: 'Enviar' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Enviando…' })).not.toBeInTheDocument();
+    await slow.release();
+
+    expect(await screen.findByText('Seu comentário foi enviado.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Enviar' })).toBeEnabled();
+  });
 });
 
 describe('correções das revisões', () => {
