@@ -6,6 +6,7 @@ import {
   describeSla,
   formatDuration,
   isCounting,
+  liveSla,
   liveState,
   mostUrgent,
   secondsLeft,
@@ -24,20 +25,31 @@ const STYLES: Record<SlaState, { icon: string; className: string }> = {
   },
 };
 
-/** Segundos só no último minuto: antes disso, um timer por minuto basta. */
-function useLiveClock(clock: SlaClock, receivedAt: number) {
+/**
+ * Um timer só, guiado pelo relógio que vence primeiro entre os que contam. Segundos só
+ * no último minuto: antes disso, um timer a cada 30 s basta.
+ */
+function useNow(clocks: SlaClock[], receivedAt: number) {
   const [now, setNow] = useState(() => Date.now());
-  const left = secondsLeft(clock, receivedAt, now);
-  const ticking = isCounting(clock.state) && left >= 0;
+  const pending = clocks
+    .filter((clock) => isCounting(clock.state))
+    .map((clock) => secondsLeft(clock, receivedAt, now))
+    .filter((left) => left >= 0);
+  const left = pending.length > 0 ? Math.min(...pending) : -1;
 
   useEffect(() => {
-    if (!ticking) return;
+    if (left < 0) return;
     const delay = left <= 60 ? 1_000 : Math.min(30_000, (left - 60) * 1_000);
     const timer = setTimeout(() => setNow(Date.now()), delay);
     return () => clearTimeout(timer);
-  }, [ticking, left, now]);
+  }, [left, now]);
 
-  return { state: liveState(clock, receivedAt, now), left };
+  return now;
+}
+
+function useLiveClock(clock: SlaClock, receivedAt: number) {
+  const now = useNow([clock], receivedAt);
+  return { state: liveState(clock, receivedAt, now), left: secondsLeft(clock, receivedAt, now) };
 }
 
 function BadgeVisual({ state, left }: { state: SlaState; left: number }) {
@@ -56,10 +68,12 @@ function BadgeVisual({ state, left }: { state: SlaState; left: number }) {
 
 /** Na fila: o relógio mais urgente à vista, os dois no texto acessível, sem região viva. */
 export function QueueSlaBadge({ sla, receivedAt }: { sla: TicketSla; receivedAt: number }) {
-  const { state, left } = useLiveClock(mostUrgent(sla), receivedAt);
+  // Os dois relógios contam: o escondido pode estourar antes do que está à vista.
+  const now = useNow([sla.firstResponse, sla.resolution], receivedAt);
+  const clock = mostUrgent(liveSla(sla, receivedAt, now));
   return (
     <>
-      <BadgeVisual state={state} left={left} />
+      <BadgeVisual state={clock.state} left={secondsLeft(clock, receivedAt, now)} />
       <span className="sr-only">{describeSla(sla)}</span>
     </>
   );

@@ -35,6 +35,15 @@ export function liveState(clock: SlaClock, receivedAt: number, now: number): Sla
     : clock.state;
 }
 
+/** Os dois relógios com o estado de agora: o que estourou entre respostas já vale Violado. */
+export function liveSla(sla: TicketSla, receivedAt: number, now: number): TicketSla {
+  const live = (clock: SlaClock): SlaClock => ({
+    ...clock,
+    state: liveState(clock, receivedAt, now),
+  });
+  return { firstResponse: live(sla.firstResponse), resolution: live(sla.resolution) };
+}
+
 /** Minutos até 1 h e segundos só no último minuto. */
 export function formatDuration(totalSeconds: number): string {
   const seconds = Math.max(0, totalSeconds);

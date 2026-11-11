@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { clearDrafts, loadDraft, saveDraft } from './drafts';
 import { ApiError, describeError, fieldErrors } from './errors';
 import { safeRedirect } from './redirect';
-import { describeSla, formatDuration, liveState, mostUrgent, secondsLeft } from './sla';
+import { describeSla, formatDuration, liveSla, liveState, mostUrgent, secondsLeft } from './sla';
 
 const clock = (state: SlaState, remainingSeconds = 600): SlaClock => ({
   state,
@@ -71,6 +71,12 @@ describe('SLA', () => {
 
   it('relógio do navegador atrás do instante da resposta não aumenta o prazo', () => {
     expect(secondsLeft(clock('OK', 10), 1_000_000, 900_000)).toBe(10);
+  });
+
+  it('o mais urgente considera o relógio que estourou depois da resposta', () => {
+    const sla = { firstResponse: clock('AT_RISK', 600), resolution: clock('OK', 30) };
+    expect(mostUrgent(liveSla(sla, 0, 30_000)).state).toBe('AT_RISK');
+    expect(mostUrgent(liveSla(sla, 0, 31_000)).state).toBe('BREACHED');
   });
 
   it('pausado não conta nem vira Violado sozinho', () => {
