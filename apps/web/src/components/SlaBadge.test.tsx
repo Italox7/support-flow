@@ -48,4 +48,20 @@ describe('QueueSlaBadge', () => {
     advanceSeconds(35);
     expect(screen.getByText('· 55 s')).toBeInTheDocument();
   });
+
+  it('o texto do leitor de tela diz Violado junto com o badge', () => {
+    const { container } = render(
+      <QueueSlaBadge
+        sla={{ firstResponse: clock('AT_RISK', 600), resolution: clock('OK', 30) }}
+        receivedAt={Date.now()}
+      />,
+    );
+    const srText = () => container.querySelector('.sr-only')?.textContent;
+    expect(srText()).toBe(
+      'Primeira resposta: Em risco, vence em 10 min. Resolução: No prazo, vence em 30 s.',
+    );
+
+    advanceSeconds(31);
+    expect(srText()).toBe('Primeira resposta: Em risco, vence em 10 min. Resolução: Violado.');
+  });
 });
