@@ -101,6 +101,40 @@ describe('api', () => {
     expect(attempts).toEqual([2, null]);
   });
 
+  it('uma repetição que termina não apaga o aviso de outra que ainda espera', async () => {
+    const routes: Record<string, (() => Response)[]> = {
+      '/api/a': [busy, () => json({ a: 1 })],
+      '/api/b': [busy, busy, () => json({ b: 1 })],
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string) => {
+        if (input.endsWith('/auth/refresh')) return json({ accessToken: 't', user: USER });
+        const next = routes[input]?.shift();
+        if (!next) throw new Error(`chamada inesperada: ${input}`);
+        return next();
+      }),
+    );
+    await session.bootstrap();
+    vi.useFakeTimers();
+    const attempts: (number | null)[] = [];
+    const stop = onBusyRetry((attempt) => attempts.push(attempt));
+
+    const a = api('/a', { method: 'POST', body: {} });
+    await vi.advanceTimersByTimeAsync(500);
+    const b = api('/b', { method: 'POST', body: {} });
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(a).resolves.toEqual({ a: 1 });
+    // A terminou, mas B ainda espera: o aviso continua ligado.
+    expect(attempts.at(-1)).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(2000);
+    await expect(b).resolves.toEqual({ b: 1 });
+    stop();
+
+    expect(attempts).toEqual([2, 2, 2, 3, null]);
+  });
+
   it('para em 3 tentativas no total', async () => {
     const fetch = await withRoutes(busy, busy, busy, busy);
     vi.useFakeTimers({ shouldAdvanceTime: true, advanceTimeDelta: 200 });

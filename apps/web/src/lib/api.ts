@@ -25,11 +25,22 @@ export function busyRetryDelay(res: Response, body: unknown): number | null {
 
 type BusyListener = (attempt: number | null) => void;
 const busyListeners = new Set<BusyListener>();
+/** Tentativa atual de cada chamada que está repetindo agora. */
+const activeRetries = new Map<symbol, number>();
 
-/** Avisa a tela da repetição em andamento: a tentativa atual, ou null ao terminar. */
+/**
+ * Avisa a tela das repetições em andamento: a maior tentativa entre as chamadas
+ * que repetem, ou null quando nenhuma repete mais. Uma chamada que termina não
+ * apaga o aviso de outra que ainda espera.
+ */
 export function onBusyRetry(listener: BusyListener): () => void {
   busyListeners.add(listener);
   return () => busyListeners.delete(listener);
+}
+
+function emitBusy() {
+  const attempt = activeRetries.size > 0 ? Math.max(...activeRetries.values()) : null;
+  busyListeners.forEach((listener) => listener(attempt));
 }
 
 function send(path: string, method: string, body: unknown, token: string): Promise<Response> {
@@ -59,6 +70,7 @@ export async function api<T>(
   let refreshed = false;
   let attempt = 1;
   let owner: string | null | undefined;
+  const retryKey = Symbol(path);
   try {
     for (;;) {
       const token = session.getToken() ?? (await session.refresh(null));
@@ -85,11 +97,11 @@ export async function api<T>(
       const delay = busyRetryDelay(res, payload);
       if (delay === null || attempt >= MAX_ATTEMPTS) throw ApiError.fromResponse(res, payload);
       attempt += 1;
-      const current = attempt;
-      busyListeners.forEach((listener) => listener(current));
+      activeRetries.set(retryKey, attempt);
+      emitBusy();
       await new Promise((resolve) => setTimeout(resolve, delay * 1000));
     }
   } finally {
-    if (attempt > 1) busyListeners.forEach((listener) => listener(null));
+    if (activeRetries.delete(retryKey)) emitBusy();
   }
 }
