@@ -74,7 +74,7 @@ export function QueueSlaBadge({ sla, receivedAt }: { sla: TicketSla; receivedAt:
   return (
     <>
       <BadgeVisual state={clock.state} left={secondsLeft(clock, receivedAt, now)} />
-      <span className="sr-only">{describeSla(sla)}</span>
+      <span className="sr-only">{describeSla(liveSla(sla, receivedAt, now))}</span>
     </>
   );
 }
