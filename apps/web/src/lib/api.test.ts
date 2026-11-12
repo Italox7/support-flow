@@ -135,6 +135,24 @@ describe('api', () => {
     expect(attempts).toEqual([2, 2, 2, 3, null]);
   });
 
+  it('quem se inscreve no meio da repetição recebe a tentativa atual na hora', async () => {
+    await withRoutes(busy, busy, () => json({ ok: 1 }));
+    vi.useFakeTimers();
+
+    const call = api('/tickets', { method: 'POST', body: {} });
+    await vi.advanceTimersByTimeAsync(500);
+    // Ex.: o Layout remonta enquanto a tentativa 2 espera.
+    const attempts: (number | null)[] = [];
+    const stop = onBusyRetry((attempt) => attempts.push(attempt));
+    expect(attempts).toEqual([2]);
+
+    await vi.advanceTimersByTimeAsync(2000);
+    await expect(call).resolves.toEqual({ ok: 1 });
+    stop();
+
+    expect(attempts).toEqual([2, 3, null]);
+  });
+
   it('para em 3 tentativas no total', async () => {
     const fetch = await withRoutes(busy, busy, busy, busy);
     vi.useFakeTimers({ shouldAdvanceTime: true, advanceTimeDelta: 200 });
