@@ -82,6 +82,8 @@ describe.skipIf(!TEST_DATABASE_URL)('auth (e2e)', () => {
       ['senha curta', { password: 'curta' }],
       ['senha longa demais', { password: 'x'.repeat(129) }],
       ['nome vazio', { name: '   ' }],
+      // O Postgres recusa NUL em texto: sem a validação, o INSERT daria 500.
+      ['nome com NUL', { name: 'a\u0000b' }],
     ])('retorna 400 com %s', async (_case, override) => {
       await http()
         .post('/api/auth/register')
