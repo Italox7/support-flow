@@ -31,15 +31,23 @@ const activeRetries = new Map<symbol, number>();
 /**
  * Avisa a tela das repetições em andamento: a maior tentativa entre as chamadas
  * que repetem, ou null quando nenhuma repete mais. Uma chamada que termina não
- * apaga o aviso de outra que ainda espera.
+ * apaga o aviso de outra que ainda espera. Quem se inscreve no meio de uma
+ * repetição recebe a tentativa atual na hora, durante a própria inscrição; sem
+ * repetição ativa, nada é chamado (null é o estado inicial de quem ouve).
  */
 export function onBusyRetry(listener: BusyListener): () => void {
   busyListeners.add(listener);
+  const attempt = currentBusyAttempt();
+  if (attempt !== null) listener(attempt);
   return () => busyListeners.delete(listener);
 }
 
+function currentBusyAttempt(): number | null {
+  return activeRetries.size > 0 ? Math.max(...activeRetries.values()) : null;
+}
+
 function emitBusy() {
-  const attempt = activeRetries.size > 0 ? Math.max(...activeRetries.values()) : null;
+  const attempt = currentBusyAttempt();
   busyListeners.forEach((listener) => listener(attempt));
 }
 
