@@ -293,6 +293,30 @@ describe.skipIf(!TEST_DATABASE_URL)('tickets (e2e)', () => {
       expect(reopened.body).toMatchObject({ status: 'IN_PROGRESS', resolvedAt: null });
     });
 
+    it('o cliente resolve o próprio ticket a partir de WAITING_CUSTOMER', async () => {
+      const ticket = await openTicket(customer);
+      await setTicket(ticket.id, { status: 'WAITING_CUSTOMER' });
+
+      const resolved = await transition(customer, ticket.id, 'RESOLVED').expect(200);
+      expect(resolved.body).toMatchObject({ status: 'RESOLVED', resolvedAt: expect.any(String) });
+    });
+
+    it('a equipe não reabre um ticket resolvido: reabrir é só do cliente', async () => {
+      const ticket = await openTicket(customer);
+      await setTicket(ticket.id, {
+        status: 'RESOLVED',
+        resolvedAt: new Date(),
+        assignee: { connect: { id: agent.id } },
+      });
+
+      // Dentro dos 7 dias e com o agente responsável: a recusa é por quem pede.
+      await transition(agent, ticket.id, 'IN_PROGRESS').expect(403);
+      await transition(admin, ticket.id, 'IN_PROGRESS').expect(403);
+
+      const stored = await prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+      expect(stored.status).toBe('RESOLVED');
+    });
+
     it('o cliente não reabre no 8º dia', async () => {
       const ticket = await openTicket(customer);
       await setTicket(ticket.id, {
@@ -435,6 +459,26 @@ describe.skipIf(!TEST_DATABASE_URL)('tickets (e2e)', () => {
       expect(stored.firstResponseAt).not.toBeNull();
       // Sem ser o responsável, responder não tira o ticket de OPEN.
       expect(stored.status).toBe('OPEN');
+    });
+
+    it('de duas 1ªs respostas simultâneas, as duas ficam e só uma marca a 1ª resposta', async () => {
+      const ticket = await openTicket(customer);
+
+      const results = await Promise.all([
+        comment(agent, ticket.id, { body: 'Olá, sou o agente.' }),
+        comment(otherAgent, ticket.id, { body: 'Olá, sou o outro agente.' }),
+      ]);
+      expect(results.map((r) => r.status)).toEqual([201, 201]);
+
+      // A 1ª resposta congela no instante de um dos dois comentários, sem ser
+      // sobrescrita pelo segundo.
+      const stored = await prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+      const comments = await prisma.comment.findMany({ where: { ticketId: ticket.id } });
+      expect(comments).toHaveLength(2);
+      expect(stored.firstResponseAt).not.toBeNull();
+      expect(comments.map((c) => c.createdAt.getTime())).toContain(
+        stored.firstResponseAt?.getTime(),
+      );
     });
 
     it('a resposta do agente responsável leva o ticket de OPEN para IN_PROGRESS', async () => {
