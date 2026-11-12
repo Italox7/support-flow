@@ -28,7 +28,7 @@ function Pagination({
       <button type="button" className="btn" disabled={page <= 1} onClick={() => onChange(page - 1)}>
         Página anterior
       </button>
-      <span aria-current="page">
+      <span>
         Página {page} de {pages}
       </span>
       <button
