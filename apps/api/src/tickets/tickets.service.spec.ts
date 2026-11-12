@@ -1,5 +1,5 @@
-import { ConflictException } from '@nestjs/common';
-import { describe, expect, it, vi } from 'vitest';
+import { ConflictException, Logger } from '@nestjs/common';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssignmentService } from '../assignment/assignment.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import { TicketsService } from './tickets.service.js';
@@ -153,5 +153,119 @@ describe('TicketsService.update', () => {
         },
       }),
     );
+  });
+});
+
+describe('TicketsService.applyCommentEffects', () => {
+  // A corrida que perde e acerta na releitura com banco de verdade está no E2E
+  // "1ª resposta com o ticket pausando no meio". Aqui ficam os outros caminhos.
+  const now = new Date('2026-11-12T12:00:00.000Z');
+  const agent = { id: 'agent-id', role: 'AGENT' as const };
+  const customer = { id: 'customer-id', role: 'CUSTOMER' as const };
+  const ticket = {
+    id: 'ticket-id',
+    status: 'IN_PROGRESS',
+    assigneeId: agent.id,
+    firstResponseAt: null,
+    slaPausedAt: null,
+    pausedSeconds: 0,
+    createdAt: new Date('2026-11-12T10:00:00.000Z'),
+    firstResponseDueAt: new Date('2026-11-12T13:00:00.000Z'),
+    firstResponseRiskAt: new Date('2026-11-12T12:30:00.000Z'),
+    resolutionDueAt: new Date('2026-11-12T18:00:00.000Z'),
+    resolutionRiskAt: new Date('2026-11-12T17:00:00.000Z'),
+  };
+  type Ticket = Parameters<TicketsService['applyCommentEffects']>[1];
+  type Tx = Parameters<TicketsService['applyCommentEffects']>[0];
+
+  /** `counts`: o resultado de cada `updateMany`, na ordem; `reread`: a releitura. */
+  function effectsWith(counts: number[], reread: object) {
+    const updateMany = vi.fn();
+    for (const count of counts) updateMany.mockResolvedValueOnce({ count });
+    const tx = {
+      ticket: {
+        updateMany,
+        findUniqueOrThrow: vi.fn().mockResolvedValue({ ...ticket, ...reread }),
+      },
+    };
+    const service = new TicketsService(
+      tx as unknown as PrismaService,
+      {} as unknown as AssignmentService,
+    );
+    const run = (current: object, author: typeof agent | typeof customer) =>
+      service.applyCommentEffects(
+        tx as unknown as Tx,
+        { ...ticket, ...current } as unknown as Ticket,
+        author,
+        false,
+        now,
+      );
+    return { run, tx };
+  }
+
+  let warn: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  describe('1ª resposta', () => {
+    it('perde, relê e acerta: sem aviso', async () => {
+      const { run, tx } = effectsWith([0, 1], {});
+
+      await run({}, agent);
+
+      expect(tx.ticket.updateMany).toHaveBeenCalledTimes(2);
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('perde duas vezes: o efeito é descartado com aviso', async () => {
+      const { run, tx } = effectsWith([0, 0], {});
+
+      await run({}, agent);
+
+      expect(tx.ticket.updateMany).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        'Efeito de comentário descartado após nova tentativa: firstResponse, ticket ticket-id',
+      );
+    });
+
+    it('outra resposta já marcou: não tenta de novo nem avisa', async () => {
+      const { run, tx } = effectsWith([0], { firstResponseAt: now });
+
+      await run({}, agent);
+
+      expect(tx.ticket.updateMany).toHaveBeenCalledTimes(1);
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('status pelo comentário do cliente', () => {
+    const waiting = { status: 'WAITING_CUSTOMER', firstResponseAt: now, slaPausedAt: now };
+
+    it('perde duas vezes: o efeito é descartado com aviso', async () => {
+      const { run, tx } = effectsWith([0, 0], waiting);
+
+      await run(waiting, customer);
+
+      expect(tx.ticket.updateMany).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledWith(
+        'Efeito de comentário descartado após nova tentativa: status → IN_PROGRESS, ticket ticket-id',
+      );
+    });
+
+    it('o status já mudou na releitura: não tenta de novo nem avisa', async () => {
+      const { run, tx } = effectsWith([0], { status: 'IN_PROGRESS' });
+
+      await run(waiting, customer);
+
+      expect(tx.ticket.updateMany).toHaveBeenCalledTimes(1);
+      expect(warn).not.toHaveBeenCalled();
+    });
   });
 });
