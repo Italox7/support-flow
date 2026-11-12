@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { PasswordField, TextField } from '../components/Fields';
 import { Page } from '../components/Page';
@@ -16,6 +16,61 @@ function WakingNotice({ pending }: { pending: boolean }) {
     <p role="status" className={slow ? 'text-muted' : 'sr-only'}>
       {slow ? WAKING_MESSAGE : ''}
     </p>
+  );
+}
+
+/** Balão de conversa com um visto: decorativo, o nome ao lado é o que se lê. */
+function LogoMark() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 32 32" className="size-9" fill="none">
+      <rect width="32" height="32" rx="8" className="fill-brand" />
+      <path
+        d="M9 10.5A2.5 2.5 0 0 1 11.5 8h9A2.5 2.5 0 0 1 23 10.5v7a2.5 2.5 0 0 1-2.5 2.5H15l-4.2 3.4c-.5.4-1.3 0-1.3-.6V20A2.5 2.5 0 0 1 9 17.5v-7Z"
+        fill="white"
+      />
+      <path
+        d="m12.5 14 2.5 2.5 4.5-4.5"
+        className="stroke-brand"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** Moldura das telas de entrada: marca, cartão e um fundo suave atrás. */
+function AuthShell({
+  title,
+  subtitle,
+  footer,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  footer: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <>
+      <div
+        aria-hidden="true"
+        className="fixed inset-0 -z-10 bg-linear-to-b from-blue-100 via-blue-50 to-canvas"
+      />
+      <div className="mx-auto max-w-md space-y-6 sm:pt-6">
+        <div className="flex items-center justify-center gap-3">
+          <LogoMark />
+          <span className="text-xl font-bold tracking-tight">Support Flow</span>
+        </div>
+        <div className="rounded-2xl border border-gray-200 bg-surface p-6 shadow-xl shadow-blue-900/10 sm:p-8">
+          <Page title={title}>
+            <p className="-mt-2 text-muted">{subtitle}</p>
+            {children}
+            <p className="border-t border-gray-200 pt-4 text-center text-sm text-muted">{footer}</p>
+          </Page>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -66,8 +121,19 @@ export function LoginPage() {
   };
 
   return (
-    <Page title="Entrar">
-      <div className="card max-w-md space-y-4">
+    <AuthShell
+      title="Entrar"
+      subtitle="Acesse sua conta para continuar."
+      footer={
+        <>
+          Ainda não tem conta?{' '}
+          <Link className="link" to="/cadastro">
+            Criar conta
+          </Link>
+        </>
+      }
+    >
+      <div className="space-y-4">
         {expired && <FormAlert message="Sua sessão expirou. Entre de novo para continuar." />}
         <FormAlert message={formError} />
         <form ref={form} noValidate className="space-y-4" onSubmit={(e) => void submit(e)}>
@@ -91,14 +157,8 @@ export function LoginPage() {
             {pending ? 'Entrando…' : 'Entrar'}
           </button>
         </form>
-        <p>
-          Ainda não tem conta?{' '}
-          <Link className="link" to="/cadastro">
-            Criar conta
-          </Link>
-        </p>
       </div>
-    </Page>
+    </AuthShell>
   );
 }
 
@@ -149,9 +209,20 @@ export function RegisterPage() {
   };
 
   return (
-    <Page title="Criar conta">
-      <div className="card max-w-md space-y-4">
-        <p>
+    <AuthShell
+      title="Criar conta"
+      subtitle="Abra tickets e acompanhe as respostas da equipe."
+      footer={
+        <>
+          Já tem conta?{' '}
+          <Link className="link" to="/entrar">
+            Entrar
+          </Link>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <p className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm">
           Esta é uma demonstração pública. Não use dados nem senhas reais: invente um e-mail (não é
           preciso confirmá-lo, por exemplo nome@example.com) e uma senha nova. Contas e tickets são
           apagados todos os dias.
@@ -188,13 +259,7 @@ export function RegisterPage() {
             {pending ? 'Criando conta…' : 'Criar conta'}
           </button>
         </form>
-        <p>
-          Já tem conta?{' '}
-          <Link className="link" to="/entrar">
-            Entrar
-          </Link>
-        </p>
       </div>
-    </Page>
+    </AuthShell>
   );
 }
