@@ -268,6 +268,14 @@ describe.skipIf(!TEST_DATABASE_URL)('auth rate limit (e2e)', () => {
     for (let i = 0; i < 5; i++) await attempt().expect(401);
     await attempt().expect(429);
   });
+
+  it('as rotas de /auth sem limite próprio herdam 30/min do controller', async () => {
+    // logout sem cookie não toca no banco: só o limite decide a resposta.
+    const logout = () => request(app.getHttpServer()).post('/api/auth/logout');
+
+    for (let i = 0; i < 30; i++) await logout().expect(204);
+    await logout().expect(429);
+  });
 });
 
 describe.skipIf(!TEST_DATABASE_URL)('limite de falhas de login por e-mail (e2e)', () => {
