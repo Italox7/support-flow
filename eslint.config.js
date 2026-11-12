@@ -79,8 +79,10 @@ export default defineConfig(
       ...reactHooks.configs.recommended.rules,
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
       // Conteúdo de ticket é escrito por usuários: só entra na tela como texto do React.
-      // Além do atributo JSX, a prop chega por spread, createElement/jsx() ou atribuição;
-      // chave computada fica fora do alcance de uma regra sintática.
+      // Além do atributo JSX, a prop chega por spread, createElement/jsx() ou atribuição.
+      // As APIs do DOM que interpretam HTML (innerHTML, outerHTML, insertAdjacentHTML,
+      // setHTMLUnsafe, createContextualFragment, document.write/writeln) também ficam de fora.
+      // Chave computada e alias (const d = document) fogem de uma regra sintática.
       'no-restricted-syntax': [
         'error',
         {
@@ -93,6 +95,21 @@ export default defineConfig(
         },
         {
           selector: "Literal[value='dangerouslySetInnerHTML']",
+          message: 'Nada de HTML cru: renderize como texto.',
+        },
+        {
+          selector:
+            'MemberExpression > Identifier.property[name=/^(innerHTML|outerHTML|insertAdjacentHTML|setHTMLUnsafe|createContextualFragment)$/]',
+          message: 'Nada de HTML cru: renderize como texto.',
+        },
+        {
+          selector:
+            'MemberExpression > Literal.property[value=/^(innerHTML|outerHTML|insertAdjacentHTML|setHTMLUnsafe|createContextualFragment)$/]',
+          message: 'Nada de HTML cru: renderize como texto.',
+        },
+        {
+          selector:
+            "MemberExpression[object.name='document'] > Identifier.property[name=/^write(ln)?$/]",
           message: 'Nada de HTML cru: renderize como texto.',
         },
       ],
