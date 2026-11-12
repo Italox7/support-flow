@@ -120,6 +120,9 @@ describe.skipIf(!TEST_DATABASE_URL)('tickets (e2e)', () => {
     it.each([
       ['título vazio', { title: '   ' }],
       ['título longo demais', { title: 'x'.repeat(201) }],
+      // O Postgres recusa NUL em texto: sem a validação, o INSERT daria 500.
+      ['título com NUL', { title: 'a\u0000b' }],
+      ['descrição com NUL', { description: 'a\u0000b' }],
       ['prioridade inexistente', { priority: 'CRITICAL' }],
       ['responsável no corpo', { assigneeId: '00000000-0000-4000-8000-000000000000' }],
       ['status no corpo', { status: 'RESOLVED' }],
@@ -470,6 +473,7 @@ describe.skipIf(!TEST_DATABASE_URL)('tickets (e2e)', () => {
     it.each([
       ['corpo vazio', { body: '   ' }],
       ['corpo longo demais', { body: 'x'.repeat(10_001) }],
+      ['corpo com NUL', { body: 'a\u0000b' }],
       ['isInternal que não é booleano', { body: 'oi', isInternal: 'sim' }],
     ])('retorna 400 com %s', async (_case, body) => {
       const ticket = await openTicket(customer);

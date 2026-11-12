@@ -140,6 +140,7 @@ describe.skipIf(!TEST_DATABASE_URL)('criação de agentes (e2e)', () => {
     ['senha longa demais', { ...VALID, password: 'x'.repeat(129) }],
     ['e-mail inválido', { ...VALID, email: 'nao-e-email' }],
     ['nome vazio', { ...VALID, name: '   ' }],
+    ['nome com NUL', { ...VALID, name: 'a\u0000b' }],
     ['papel no corpo', { ...VALID, role: 'ADMIN' }],
     ['disponibilidade no corpo', { ...VALID, isAvailable: true }],
   ])('retorna 400 com %s', async (_case, body) => {

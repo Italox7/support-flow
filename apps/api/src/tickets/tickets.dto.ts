@@ -16,6 +16,7 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
+import { NoNul } from '../common/no-nul.js';
 import { SLA_FILTERS, type SlaFilter } from '../sla/sla-filters.js';
 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
@@ -75,12 +76,14 @@ export class CreateTicketDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(200)
+  @NoNul()
   title!: string;
 
   @Transform(trim)
   @IsString()
   @IsNotEmpty()
   @MaxLength(10_000)
+  @NoNul()
   description!: string;
 
   @IsOptional()
@@ -112,6 +115,7 @@ export class CreateCommentDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(10_000)
+  @NoNul()
   body!: string;
 
   @IsOptional()
