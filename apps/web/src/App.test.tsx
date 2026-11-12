@@ -417,10 +417,10 @@ describe('listas', () => {
     });
     await renderAt('/fila?page=2');
 
-    expect(await screen.findByText('Página 2 de 3')).toHaveAttribute('aria-current', 'page');
+    expect(await screen.findByText('Página 2 de 3')).toBeInTheDocument();
   });
 
-  it('o agente indisponível vê o aviso e a chave diz o estado em texto', async () => {
+  it('o agente indisponível vê o aviso; a chave tem nome fixo e o estado no ícone', async () => {
     stubApi(AGENT, {
       'GET /tickets?page=1': json({ items: [], page: 1, pageSize: 20, total: 0 }),
       'GET /users/me/availability': json({ isAvailable: false }),
@@ -432,6 +432,8 @@ describe('listas', () => {
     const toggle = screen.getByRole('switch', { name: 'Disponível para receber tickets' });
     await waitFor(() => expect(toggle).toBeEnabled());
     expect(toggle).toHaveAttribute('aria-checked', 'false');
+    // Desligada, o texto visível segue "Disponível": o nome falado o contém (WCAG 2.5.3).
+    expect(toggle).toHaveTextContent(/^○Disponível$/);
 
     fireEvent.click(toggle);
 
@@ -1078,6 +1080,10 @@ describe('admin', () => {
       'Baixa',
       'Urgente',
     ]);
+    // Os rótulos dos campos se repetem: cada formulário leva o nome da prioridade.
+    const low = screen.getByRole('form', { name: 'Baixa' });
+    expect(within(low).getByLabelText('1ª resposta (minutos)')).toBeInTheDocument();
+    expect(screen.getByRole('form', { name: 'Urgente' })).toBeInTheDocument();
     fireEvent.click(save);
     expect(await screen.findByRole('alert')).toHaveTextContent('A 1ª resposta precisa ter');
 

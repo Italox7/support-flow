@@ -61,8 +61,10 @@ export function AvailabilitySwitch() {
         className={`btn ${isAvailable ? 'border-green-800 bg-green-100 text-green-950 hover:bg-green-200' : ''}`}
         onClick={() => mutation.mutate(!isAvailable)}
       >
+        {/* Texto fixo: o nome falado contém o visível (WCAG 2.5.3); o estado está no ícone, na cor,
+            no aria-checked e, desligada, na faixa "Você está indisponível". */}
         <span aria-hidden="true">{isAvailable ? '●' : '○'}</span>
-        {isAvailable ? 'Disponível' : 'Indisponível'}
+        Disponível
       </button>
       <span className="sr-only" role="status">
         {notice}

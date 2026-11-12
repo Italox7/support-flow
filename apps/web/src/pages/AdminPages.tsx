@@ -1,6 +1,6 @@
 import { Priority, type AgentSummary, type SlaPolicyDto } from '@support-flow/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRef, useState, type FormEvent } from 'react';
+import { useId, useRef, useState, type FormEvent } from 'react';
 import { PasswordField, TextField } from '../components/Fields';
 import { Page } from '../components/Page';
 import { EmptyState, FormAlert, Loading, QueryError } from '../components/States';
@@ -185,6 +185,7 @@ function PolicyForm({ policy }: { policy: SlaPolicyDto }) {
   >({});
   useFocusFirstInvalid(form, errors);
   const label = PRIORITY_LABELS[policy.priority];
+  const headingId = useId();
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -213,8 +214,17 @@ function PolicyForm({ policy }: { policy: SlaPolicyDto }) {
   };
 
   return (
-    <form ref={form} noValidate className="card space-y-3" onSubmit={submit}>
-      <h2 className="text-lg font-semibold">{label}</h2>
+    // Nomeado pela prioridade: os 4 formulários têm os mesmos rótulos de campo.
+    <form
+      ref={form}
+      noValidate
+      aria-labelledby={headingId}
+      className="card space-y-3"
+      onSubmit={submit}
+    >
+      <h2 id={headingId} className="text-lg font-semibold">
+        {label}
+      </h2>
       <p role="status" className={saved ? 'rounded-md bg-slate-200 p-2' : 'sr-only'}>
         {saved}
       </p>
