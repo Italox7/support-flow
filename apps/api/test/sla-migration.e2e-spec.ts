@@ -19,6 +19,15 @@ const MEDIUM = { firstResponseMinutes: 480, resolutionMinutes: 2880 };
 const migrationSql = (name: string) =>
   readFileSync(join(MIGRATIONS, name, 'migration.sql'), 'utf8');
 
+// As colunas são TIMESTAMP sem fuso, em UTC como o Prisma grava. Por padrão o pg
+// manda um Date em hora local e o lê de volta como hora local: fora de UTC, o
+// teste gravaria dados deslocados e a conta da migration cruzaria o horário de
+// verão (America/New_York: 48 min a menos no resolutionRiskAt). Daí ISO na
+// escrita e UTC na leitura, só neste client.
+const utc = (date: Date | null | undefined) => date?.toISOString() ?? null;
+const utcTypes = new pg.TypeOverrides();
+utcTypes.setTypeParser(pg.types.builtins.TIMESTAMP, (value) => new Date(`${value}Z`));
+
 describe.skipIf(!TEST_DATABASE_URL)('migration do SLA sobre dados existentes (e2e)', () => {
   let client: pg.Client;
 
@@ -51,14 +60,14 @@ describe.skipIf(!TEST_DATABASE_URL)('migration do SLA sobre dados existentes (e2
       [
         title,
         fields.status,
-        fields.createdAt,
-        fields.updatedAt ?? fields.createdAt,
-        new Date(start + firstMs),
-        new Date(start + resolutionMs),
-        fields.slaPausedAt ?? null,
+        utc(fields.createdAt),
+        utc(fields.updatedAt ?? fields.createdAt),
+        utc(new Date(start + firstMs)),
+        utc(new Date(start + resolutionMs)),
+        utc(fields.slaPausedAt),
         paused,
-        fields.resolvedAt ?? null,
-        fields.closedAt ?? null,
+        utc(fields.resolvedAt),
+        utc(fields.closedAt),
       ],
     );
   }
@@ -69,6 +78,7 @@ describe.skipIf(!TEST_DATABASE_URL)('migration do SLA sobre dados existentes (e2
   beforeAll(async () => {
     client = new pg.Client({
       connectionString: parseDatabaseUrl(TEST_DATABASE_URL!).connectionString,
+      types: utcTypes,
     });
     await client.connect();
     await client.query(`DROP SCHEMA IF EXISTS "${SCHEMA}" CASCADE; CREATE SCHEMA "${SCHEMA}"`);
