@@ -55,14 +55,14 @@ function AuthShell({
     <>
       <div
         aria-hidden="true"
-        className="fixed inset-0 -z-10 bg-linear-to-b from-blue-100 via-blue-50 to-canvas"
+        className="fixed inset-0 -z-10 bg-linear-to-b from-slate-300 via-slate-300 to-slate-400"
       />
       <div className="mx-auto max-w-md space-y-6 sm:pt-6">
         <div className="flex items-center justify-center gap-3">
           <LogoMark />
           <span className="text-xl font-bold tracking-tight">Support Flow</span>
         </div>
-        <div className="rounded-2xl border border-gray-200 bg-surface p-6 shadow-xl shadow-blue-900/10 sm:p-8">
+        <div className="rounded-2xl border border-gray-200 bg-surface p-6 shadow-xl shadow-slate-900/20 sm:p-8">
           <Page title={title}>
             <p className="-mt-2 text-muted">{subtitle}</p>
             {children}
